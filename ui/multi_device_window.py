@@ -86,10 +86,6 @@ class MultiDeviceWindow(QMainWindow):
         self.add_panel_btn.clicked.connect(self._add_panel)
         toolbar.addWidget(self.add_panel_btn)
 
-        self.close_panel_btn = QPushButton("× Close Panel")
-        self.close_panel_btn.clicked.connect(self._close_last_panel)
-        self.close_panel_btn.setEnabled(False)
-        toolbar.addWidget(self.close_panel_btn)
 
         toolbar.addSeparator()
 
@@ -161,7 +157,7 @@ class MultiDeviceWindow(QMainWindow):
     
 
     def _initialize_panels(self):
-        initial_devices = ADBHandler().get_connected_devices()
+        initial_devices = ADBHandler().get_unique_devices()
 
         if not initial_devices:
             self.device_status_label.setText("No devices connected")
@@ -187,6 +183,7 @@ class MultiDeviceWindow(QMainWindow):
             self.splitter.addWidget(panel)
             self.device_panels.append(panel)
             panel.cross_device_drop.connect(self._on_cross_device_drop)
+            panel.close_requested.connect(lambda p=panel: self._close_panel(p))
 
             
             idx = len(self.device_panels)
@@ -200,7 +197,7 @@ class MultiDeviceWindow(QMainWindow):
 
     def _add_panel(self):
         handler = ADBHandler()
-        devices = handler.get_connected_devices()
+        devices = handler.get_unique_devices()
         if not devices:
             QMessageBox.information(self, "No Devices", "No ADB devices connected.")
             return
@@ -216,23 +213,20 @@ class MultiDeviceWindow(QMainWindow):
 
         dialog = DeviceChooser(available, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            serial = dialog.selected_device()
-            model = available.get(serial, "Unknown")
-            self._add_panel_for_device(serial, model)
+            for serial in dialog.selected_devices():
+                self._add_panel_for_device(serial, available.get(serial, "Unknown"))
 
-    def _close_last_panel(self):
-        if not self.device_panels:
+    def _close_panel(self, panel):
+        if panel not in self.device_panels:
             return
-        panel = self.device_panels.pop()
-        self.splitter.removeWidget(panel)
-        panel.deleteLater()
+        self.device_panels.remove(panel)
+        panel.prepare_for_close()
         self._update_panel_count_ui()
         self._reconnect_drop_signals()
         self.status_label.setText("Panel closed")
 
     def _update_panel_count_ui(self):
-        count = len(self.device_panels)
-        self.close_panel_btn.setEnabled(count > 0)
+        pass
 
     def _reconnect_drop_signals(self):
         

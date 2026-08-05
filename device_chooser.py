@@ -6,16 +6,19 @@ from PyQt6.QtCore import Qt
 class DeviceChooser(QDialog):
     def __init__(self, devices, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Select Device")
+        self.setWindowTitle("Open device panels")
+        self.setObjectName("device_chooser")
         self.setMinimumWidth(400)
 
         layout = QVBoxLayout(self)
 
-        label = QLabel("Select a device to connect:")
+        label = QLabel("Select device panels to open:")
+        label.setObjectName("chooser_prompt")
         layout.addWidget(label)
 
         self.device_list = QListWidget()
-        self.device_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.device_list.setObjectName("device_picker")
+        self.device_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
 
         for serial, model in devices.items():
             item = QListWidgetItem(f"{model} ({serial})")
@@ -35,6 +38,8 @@ class DeviceChooser(QDialog):
         self.button_box.rejected.connect(self.reject)
         layout.addWidget(self.button_box)
 
+    def selected_devices(self):
+        return [item.data(Qt.ItemDataRole.UserRole) for item in self.device_list.selectedItems()]
     def selected_device(self):
         if self.device_list.currentItem():
             return self.device_list.currentItem().data(Qt.ItemDataRole.UserRole)

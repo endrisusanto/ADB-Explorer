@@ -20,6 +20,18 @@ QWidget {
     border-bottom: 1px solid #d0d8e4;
 }
 
+QPushButton#panel_close_btn {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: #667085;
+    font-size: 16px;
+    font-weight: 600;
+}
+QPushButton#panel_close_btn:hover {
+    background: #e6ebf2;
+    color: #b42318;
+}
 /* ── Navigation bar ────────────────────────────────────── */
 #nav_container {
     background: #ffffff;
@@ -315,8 +327,27 @@ QInputDialog QLabel {
     font-size: 12px;
     color: #444;
 }
-"""
 
+#panel_header {
+    background: #f0f4fa;
+    border-bottom: 1px solid #d0d8e4;
+}
+#panel_header #device_header {
+    padding: 0 2px;
+    background: transparent;
+    border: none;
+    color: #243447;
+}
+QDialog#device_chooser { background: #f8fafc; }
+QLabel#chooser_prompt { color: #344054; font-weight: 600; }
+QListWidget#device_picker {
+    background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px;
+    color: #1f2937; outline: 0;
+}
+QListWidget#device_picker::item { padding: 8px 10px; margin: 2px 4px; border-radius: 4px; }
+QListWidget#device_picker::item:hover { background: #eef4fb; }
+QListWidget#device_picker::item:selected { background: #dbeafe; color: #1d4ed8; }
+"""
 DARK = """
 /* ── Root / Global ─────────────────────────────────────── */
 QMainWindow, QDialog {
@@ -338,6 +369,18 @@ QWidget {
     color: #cdd6f4;
 }
 
+QPushButton#panel_close_btn {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: #a6adc8;
+    font-size: 16px;
+    font-weight: 600;
+}
+QPushButton#panel_close_btn:hover {
+    background: #45475a;
+    color: #f38ba8;
+}
 /* ── Navigation bar ────────────────────────────────────── */
 #nav_container {
     background: #181825;
@@ -641,4 +684,23 @@ QInputDialog QLabel {
     font-size: 12px;
     color: #cdd6f4;
 }
-"""
+
+#panel_header {
+    background: #181825;
+    border-bottom: 1px solid #313244;
+}
+#panel_header #device_header {
+    padding: 0 2px;
+    background: transparent;
+    border: none;
+    color: #cdd6f4;
+}
+QDialog#device_chooser { background: #11111b; }
+QLabel#chooser_prompt { color: #cdd6f4; font-weight: 600; }
+QListWidget#device_picker {
+    background: #1e1e2e; border: 1px solid #45475a; border-radius: 6px;
+    color: #cdd6f4; outline: 0;
+}
+QListWidget#device_picker::item { padding: 8px 10px; margin: 2px 4px; border-radius: 4px; }
+QListWidget#device_picker::item:hover { background: #313244; }
+QListWidget#device_picker::item:selected { background: #45475a; color: #89b4fa; }"""

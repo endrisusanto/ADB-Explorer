@@ -105,6 +105,38 @@ class ADBHandler:
             self.logger.error(f"Error listing devices: {e}")
             return {}
 
+    def get_device_identity(self, serial: str) -> str:
+        """Return the physical device serial reported by a specific ADB endpoint."""
+        try:
+            result = subprocess.run(
+                ['adb', '-s', serial, 'get-serialno'],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                startupinfo=self._make_startupinfo(),
+                creationflags=self._WIN_FLAGS,
+            )
+            identity = result.stdout.strip()
+            if result.returncode == 0 and identity and identity != 'unknown':
+                return identity
+        except Exception:
+            pass
+        return serial
+
+    def get_unique_devices(self):
+        """Return one preferred ADB endpoint per physical device, preferring USB."""
+        unique = {}
+        for serial, model in self.get_connected_devices().items():
+            identity = self.get_device_identity(serial)
+            candidate = (serial, model)
+            current = unique.get(identity)
+            if current is None or self._endpoint_priority(serial) < self._endpoint_priority(current[0]):
+                unique[identity] = candidate
+        return {serial: model for serial, model in unique.values()}
+
+    @staticmethod
+    def _endpoint_priority(serial: str):
+        return (':' in serial, serial)
     def check_adb_connection(self) -> bool:
         try:
             result = self._run_adb_command(['devices'])

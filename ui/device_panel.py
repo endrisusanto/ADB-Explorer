@@ -55,7 +55,8 @@ class PathInput(QLineEdit):
 
 class DevicePanel(QWidget):
 
-    cross_device_drop = pyqtSignal(str, list, str)  
+    cross_device_drop = pyqtSignal(str, list, str)
+    close_requested = pyqtSignal()
 
     def __init__(self, parent, adb_handler, device_info=None):
         super().__init__(parent)
@@ -71,6 +72,7 @@ class DevicePanel(QWidget):
         self._loading = False
         self._refresh_pending = False
         self._refresh_task = None
+        self._closing = False
 
         
         self._icon_provider = QFileIconProvider()
@@ -106,9 +108,22 @@ class DevicePanel(QWidget):
         layout.setSpacing(2)
 
         
+        header_container = QWidget()
+        header_container.setObjectName("panel_header")
+        header_layout = QHBoxLayout(header_container)
+        header_layout.setContentsMargins(6, 2, 4, 2)
         self.device_header = QLabel(self.device_name)
         self.device_header.setObjectName("device_header")
-        layout.addWidget(self.device_header)
+        header_layout.addWidget(self.device_header)
+        header_layout.addStretch()
+        self.close_btn = QPushButton("×")
+        self.close_btn.setObjectName("panel_close_btn")
+        self.close_btn.setToolTip("Close this device panel")
+        self.close_btn.setAccessibleName("Close device panel")
+        self.close_btn.setFixedSize(24, 24)
+        self.close_btn.clicked.connect(self.close_requested.emit)
+        header_layout.addWidget(self.close_btn)
+        layout.addWidget(header_container)
 
         
         self.conn_label = QLabel("🟢 Connected" if self.adb_handler.device_connected else "🔴 Disconnected")
@@ -185,13 +200,19 @@ class DevicePanel(QWidget):
         self.tree_view.customContextMenuRequested.connect(self.show_context_menu)
 
     def _setup_shortcuts(self):
-        
-        QShortcut(QKeySequence.StandardKey.Copy, self).activated.connect(self.copy_selected)
-        QShortcut(QKeySequence.StandardKey.Cut, self).activated.connect(self.cut_selected)
-        QShortcut(QKeySequence.StandardKey.Paste, self).activated.connect(self.paste_items)
-        
-        QShortcut(QKeySequence(Qt.Key.Key_Delete), self).activated.connect(self._shortcut_delete)
-        QShortcut(QKeySequence(Qt.Key.Key_F2), self).activated.connect(self._shortcut_rename)
+        self._shortcuts = []
+        bindings = (
+            (QKeySequence.StandardKey.Copy, self.copy_selected),
+            (QKeySequence.StandardKey.Cut, self.cut_selected),
+            (QKeySequence.StandardKey.Paste, self.paste_items),
+            (QKeySequence(Qt.Key.Key_Delete), self._shortcut_delete),
+            (QKeySequence(Qt.Key.Key_F2), self._shortcut_rename),
+        )
+        for key, handler in bindings:
+            shortcut = QShortcut(key, self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(handler)
+            self._shortcuts.append(shortcut)
 
     def update_connection_status(self):
         if self.adb_handler.device_connected:
@@ -233,6 +254,8 @@ class DevicePanel(QWidget):
     
 
     def refresh_files(self):
+        if self._closing:
+            return
         if not self.adb_handler.device_connected:
             self.status_label.setText("No ADB device")
             return
@@ -250,6 +273,8 @@ class DevicePanel(QWidget):
 
         def on_files(files):
             self._loading = False
+            if self._closing:
+                return
             if files is not None:
                 self.all_files = files
                 self.apply_search_filter()
@@ -273,6 +298,22 @@ class DevicePanel(QWidget):
         task.finished_signal.connect(on_files)
         task.finished_signal.connect(clear_refresh_task)
         task.start()
+
+    def prepare_for_close(self):
+        """Keep the panel alive until its refresh worker has stopped."""
+        if self._closing:
+            return
+
+        self._closing = True
+        self._refresh_pending = False
+        self.hide()
+
+        task = self._refresh_task
+        if task is not None and task.isRunning():
+            task.finished.connect(self.deleteLater)
+        else:
+            self.deleteLater()
+
 
     def apply_search_filter(self):
         if not hasattr(self, 'all_files') or self.all_files is None:
