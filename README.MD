@@ -51,6 +51,7 @@ python main.py
 **Windows:**
 - Download [Android SDK Platform Tools](https://developer.android.com/studio/releases/platform-tools)
 - Extract and add to system PATH
+
 **macOS:**
 ```bash
 brew install android-platform-tools
