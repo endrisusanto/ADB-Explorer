@@ -14,15 +14,15 @@ UninstPage instfiles
 
 Section "Install"
   SetOutPath "$INSTDIR"
-  File "dist\ADB Explorer.exe"
+  File "dist\ADB-Explorer.exe"
   File /nonfatal "assets\logo.svg"
-  CreateShortcut "$DESKTOP\ADB Explorer.lnk" "$INSTDIR\ADB Explorer.exe"
+  CreateShortcut "$DESKTOP\ADB Explorer.lnk" "$INSTDIR\ADB-Explorer.exe"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 SectionEnd
 
 Section "Uninstall"
   Delete "$DESKTOP\ADB Explorer.lnk"
-  Delete "$INSTDIR\ADB Explorer.exe"
+  Delete "$INSTDIR\ADB-Explorer.exe"
   Delete "$INSTDIR\logo.svg"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"

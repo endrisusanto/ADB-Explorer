@@ -26,7 +26,7 @@ jobs:
       - name: Build portable exe
         shell: pwsh
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "ADB Explorer" --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import logging.handlers --add-data "assets;assets" --clean --log-level ERROR main.py
+          pyinstaller --noconfirm --onefile --windowed --name "ADB-Explorer" --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import logging.handlers --add-data "assets;assets" --clean --log-level ERROR main.py
       - name: Build NSIS installer
         shell: pwsh
         run: |
@@ -49,7 +49,7 @@ jobs:
               </Directory>
               <DirectoryRef Id="INSTALLFOLDER">
                 <Component Id="AppExe" Guid="*">
-                  <File Id="AppExeFile" Source="dist\ADB Explorer.exe" KeyPath="yes" />
+                  <File Id="AppExeFile" Source="dist\ADB-Explorer.exe" KeyPath="yes" />
                 </Component>
               </DirectoryRef>
               <Feature Id="DefaultFeature" Level="1">
@@ -65,7 +65,7 @@ jobs:
         with:
           name: windows
           path: |
-            dist/ADB Explorer.exe
+            dist/ADB-Explorer.exe
             dist/*.msi
             dist/*setup.exe
       - name: Publish Windows assets
@@ -73,7 +73,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/ADB Explorer.exe
+            dist/ADB-Explorer.exe
             dist/*.msi
             dist/*setup.exe
 
