@@ -30,7 +30,8 @@ jobs:
           Get-ChildItem dist -Recurse
           $exe = Get-ChildItem dist -Filter "*.exe" -Recurse | Select-Object -First 1
           if (-not $exe) { throw "PyInstaller did not produce an exe" }
-          Copy-Item $exe.FullName "dist\ADB-Explorer.exe" -Force
+          $target = Join-Path (Get-Location) "dist\ADB-Explorer.exe"
+          if ($exe.FullName -ne $target) { Copy-Item $exe.FullName $target -Force }
       - name: Build NSIS installer
         shell: pwsh
         run: |
