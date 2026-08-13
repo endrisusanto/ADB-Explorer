@@ -27,6 +27,10 @@ jobs:
         shell: pwsh
         run: |
           pyinstaller --noconfirm --onefile --windowed --name "ADB-Explorer" --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import logging.handlers --add-data "assets;assets" --clean --log-level ERROR main.py
+          Get-ChildItem dist -Recurse
+          $exe = Get-ChildItem dist -Filter "*.exe" -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "PyInstaller did not produce an exe" }
+          Copy-Item $exe.FullName "dist\ADB-Explorer.exe" -Force
       - name: Build NSIS installer
         shell: pwsh
         run: |
