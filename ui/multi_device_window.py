@@ -1,19 +1,21 @@
 import os
 import sys
+import hashlib
+import shutil
 from pathlib import Path
 import subprocess
 import configparser
 
 from PyQt6.QtWidgets import (
     QMainWindow, QSplitter, QVBoxLayout, QHBoxLayout, QWidget,
-    QPushButton, QMessageBox, QStatusBar, QLabel, QToolBar, QDialog,
-    QFileDialog, QMenu, QApplication,
+    QPushButton, QMessageBox, QStatusBar, QLabel, QDialog,
+    QFileDialog, QMenu, QApplication, QScrollArea, QSizePolicy,
+    QGraphicsDropShadowEffect,
 )
-from PyQt6.QtCore import Qt, QTimer, QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import Qt, QTimer, QUrl, QEvent
+from PyQt6.QtGui import QDesktopServices, QIcon, QColor
 
-from handler import ADBHandler
-from device_chooser import DeviceChooser
+from handler import ADBHandler, LocalFileHandler
 from ui.device_panel import DevicePanel
 from ui.widgets import ADB_MIME
 from ui.task_manager import BackgroundTaskManager
@@ -24,7 +26,35 @@ def get_base_dir():
         return Path(sys.executable).parent
     return Path(os.path.abspath(__file__)).parent
 
-CONFIG_PATH = get_base_dir() / "config.ini"
+def get_resource_dir():
+    return Path(getattr(sys, "_MEIPASS", Path(os.path.abspath(__file__)).parent.parent))
+
+CONFIG_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "adb-file-explorer" / "config.ini"
+MAX_PANELS = 4
+MODEL_COLORS = (
+    "#2563eb", "#dc2626", "#16a34a", "#f97316",
+    "#7c3aed", "#0891b2", "#db2777", "#65a30d",
+    "#0f766e", "#ca8a04", "#4f46e5", "#be123c",
+)
+
+
+def _model_color(model):
+    digest = hashlib.blake2s(model.encode("utf-8"), digest_size=1).digest()[0]
+    return MODEL_COLORS[digest % len(MODEL_COLORS)]
+
+
+def _soft_color(color):
+    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    return f"rgba({r}, {g}, {b}, 42)"
+
+
+def _card_shadow(color, dark):
+    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    effect = QGraphicsDropShadowEffect()
+    effect.setBlurRadius(12 if dark else 10)
+    effect.setOffset(0, 0 if dark else 3)
+    effect.setColor(QColor(r, g, b, 190 if dark else 115))
+    return effect
 
 def _load_theme():
     cp = configparser.ConfigParser()
@@ -42,6 +72,7 @@ def _save_theme(dark: bool):
         cp["app"] = {}
     cp["app"]["dark_mode"] = "yes" if dark else "no"
     try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(CONFIG_PATH, "w") as f:
             cp.write(f)
     except Exception:
@@ -54,6 +85,7 @@ class MultiDeviceWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("ADB Explorer")
         self.setGeometry(100, 100, 1100, 600)
+        self.setWindowIcon(QIcon(str(get_resource_dir() / "assets" / "logo.svg")))
 
         self.device_panels = []
         self._dark = _load_theme()
@@ -72,25 +104,65 @@ class MultiDeviceWindow(QMainWindow):
 
     def _setup_ui(self):
         central = QWidget()
+        central.setObjectName("app_root")
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         
-        toolbar = QToolBar("Main")
-        toolbar.setMovable(False)
-        self.addToolBar(toolbar)
-
-        self.add_panel_btn = QPushButton("+ Add Panel")
-        self.add_panel_btn.clicked.connect(self._add_panel)
-        toolbar.addWidget(self.add_panel_btn)
-
-
-        toolbar.addSeparator()
+        topbar = QWidget()
+        topbar.setObjectName("main_topbar")
+        topbar.setFixedHeight(96)
+        topbar_layout = QHBoxLayout(topbar)
+        topbar_layout.setContentsMargins(12, 8, 12, 10)
+        topbar_layout.setSpacing(10)
+        layout.addWidget(topbar)
 
         self.device_status_label = QLabel("Detecting devices...")
-        toolbar.addWidget(self.device_status_label)
+        self.device_status_label.setObjectName("device_count_badge")
+        self.device_status_label.setToolTip("Connected device count")
+
+        self.device_scroll = QScrollArea()
+        self.device_scroll.setObjectName("device_strip")
+        self.device_scroll.setWidgetResizable(True)
+        self.device_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.device_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.device_scroll.setFixedHeight(78)
+        self.device_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.device_scroll.viewport().installEventFilter(self)
+        self.device_scroll.horizontalScrollBar().setSingleStep(28)
+        self.device_strip = QWidget()
+        self.device_strip_layout = QHBoxLayout(self.device_strip)
+        self.device_strip_layout.setContentsMargins(14, 10, 14, 18)
+        self.device_strip_layout.setSpacing(10)
+        self.device_strip.installEventFilter(self)
+        self.device_scroll.setWidget(self.device_strip)
+        topbar_layout.addWidget(self.device_scroll, 1)
+
+        self.action_group = QWidget()
+        self.action_group.setObjectName("topbar_actions")
+        action_layout = QHBoxLayout(self.action_group)
+        action_layout.setContentsMargins(4, 4, 4, 4)
+        action_layout.setSpacing(6)
+        topbar_layout.addWidget(self.action_group)
+
+        action_layout.addWidget(self.device_status_label)
+
+        self.refresh_devices_btn = QPushButton()
+        self.refresh_devices_btn.setObjectName("icon_badge")
+        self.refresh_devices_btn.setToolTip("Refresh devices")
+        self.refresh_devices_btn.clicked.connect(lambda _=False: self._refresh_device_cards())
+        action_layout.addWidget(self.refresh_devices_btn)
+
+        self.theme_btn = QPushButton()
+        self.theme_btn.setObjectName("icon_badge")
+        self.theme_btn.setCheckable(True)
+        self.theme_btn.setChecked(self._dark)
+        self.theme_btn.setToolTip("Toggle dark mode")
+        self._update_topbar_icons()
+        self.theme_btn.toggled.connect(self._toggle_theme)
+        action_layout.addWidget(self.theme_btn)
 
         
         menubar = self.menuBar()
@@ -137,6 +209,21 @@ class MultiDeviceWindow(QMainWindow):
         if hasattr(self, 'task_manager'):
             self._position_task_manager()
 
+    def eventFilter(self, obj, event):
+        in_device_strip = (
+            hasattr(self, "device_scroll")
+            and (obj is self.device_scroll.viewport()
+                 or obj is self.device_strip
+                 or self.device_strip.isAncestorOf(obj))
+        )
+        if in_device_strip and event.type() == QEvent.Type.Wheel:
+            delta = event.angleDelta().y() or event.angleDelta().x()
+            if delta:
+                bar = self.device_scroll.horizontalScrollBar()
+                bar.setValue(bar.value() - delta)
+                return True
+        return super().eventFilter(obj, event)
+
     def closeEvent(self, event):
         if hasattr(self, 'task_manager'):
             self.task_manager.setParent(None)
@@ -158,28 +245,20 @@ class MultiDeviceWindow(QMainWindow):
 
     def _initialize_panels(self):
         initial_devices = ADBHandler().get_unique_devices()
+        self._refresh_device_cards(initial_devices)
 
         if not initial_devices:
-            self.device_status_label.setText("No devices connected")
-            self.status_label.setText("No ADB devices found. Connect a device and use + Add Panel.")
+            self.status_label.setText("No ADB devices found. Connect a device and refresh.")
             return
 
-        devices_list = list(initial_devices.items())
-        self.device_status_label.setText(f"{len(devices_list)} device(s) connected")
+        self.status_label.setText("Ready. Choose a card to open a panel.")
 
-        
-        serial, model = devices_list[0]
-        self._add_panel_for_device(serial, model)
-
-        
-        if len(devices_list) >= 2:
-            serial, model = devices_list[1]
-            self._add_panel_for_device(serial, model)
-
-    def _add_panel_for_device(self, serial, model):
+    def _add_panel_for_device(self, serial, model, start_path="/storage/emulated/0"):
+        if self._panel_limit_reached():
+            return None
         try:
             handler = ADBHandler(device_serial=serial)
-            panel = DevicePanel(self.splitter, handler, device_info={"model": model})
+            panel = DevicePanel(self.splitter, handler, device_info={"model": model}, start_path=start_path)
             self.splitter.addWidget(panel)
             self.device_panels.append(panel)
             panel.cross_device_drop.connect(self._on_cross_device_drop)
@@ -196,25 +275,13 @@ class MultiDeviceWindow(QMainWindow):
             return None
 
     def _add_panel(self):
-        handler = ADBHandler()
-        devices = handler.get_unique_devices()
-        if not devices:
-            QMessageBox.information(self, "No Devices", "No ADB devices connected.")
-            return
-
-        
+        devices = ADBHandler().get_unique_devices()
         existing_serials = {p.device_serial for p in self.device_panels}
-        available = {s: m for s, m in devices.items() if s not in existing_serials}
-
-        if not available:
-            QMessageBox.information(self, "All Connected",
-                                    "All detected devices already have panels open.")
-            return
-
-        dialog = DeviceChooser(available, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            for serial in dialog.selected_devices():
-                self._add_panel_for_device(serial, available.get(serial, "Unknown"))
+        for serial, model in devices.items():
+            if serial not in existing_serials:
+                self._add_panel_for_device(serial, model)
+                return
+        QMessageBox.information(self, "No Devices", "No unopened ADB devices found.")
 
     def _close_panel(self, panel):
         if panel not in self.device_panels:
@@ -226,7 +293,115 @@ class MultiDeviceWindow(QMainWindow):
         self.status_label.setText("Panel closed")
 
     def _update_panel_count_ui(self):
-        pass
+        self._refresh_device_cards()
+
+    def _panel_limit_reached(self):
+        if len(self.device_panels) < MAX_PANELS:
+            return False
+        self.status_label.setText(f"Maximum {MAX_PANELS} panels open")
+        return True
+
+    def _style_device_card(self, btn, model):
+        color = _model_color(model or "Root")
+        soft = _soft_color(color)
+        bg = "#141416" if self._dark else "#ffffff"
+        hover = "#18181b" if self._dark else "#f8fbff"
+        base_text = "#f4f4f5" if self._dark else "#334155"
+        text = "#f4f4f5" if self._dark else "#0f172a"
+        disabled = "#71717a" if self._dark else "#94a3b8"
+        btn.setStyleSheet(
+            f"QPushButton#device_card {{ background: {bg}; border-color: {color}; color: {base_text}; }}"
+            f"QPushButton#device_card:hover {{ background: {hover}; border-color: {color}; color: {text}; }}"
+            f"QPushButton#device_card:checked {{ background: {soft}; border-color: {color}; color: {text}; }}"
+            f"QPushButton#device_card:disabled {{ border-color: {color}; color: {disabled}; }}"
+        )
+        btn.style().unpolish(btn)
+        btn.style().polish(btn)
+        btn._shadow_effect = _card_shadow(color, self._dark) if btn.isChecked() else None
+        btn.setGraphicsEffect(btn._shadow_effect)
+        btn.update()
+
+    def _repolish_topbar(self):
+        for widget in (self.action_group, self.device_status_label, self.refresh_devices_btn, self.theme_btn):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.update()
+
+    def _refresh_device_cards(self, devices=None):
+        devices = ADBHandler().get_unique_devices() if devices is None else devices
+        bar = self.device_scroll.horizontalScrollBar()
+        scroll_x = bar.value()
+        while self.device_strip_layout.count():
+            item = self.device_strip_layout.takeAt(0)
+            if item.widget():
+                widget = item.widget()
+                widget.setParent(None)
+                widget.deleteLater()
+
+        opened = {p.device_serial for p in self.device_panels}
+        root_open = any(p.device_serial == LocalFileHandler.device_serial for p in self.device_panels)
+        can_open = len(self.device_panels) < MAX_PANELS
+        self.device_status_label.setText(str(len(devices)))
+
+        if not devices:
+            empty = QLabel("No ADB devices connected")
+            empty.setObjectName("device_empty")
+            empty.installEventFilter(self)
+            self.device_strip_layout.addWidget(empty)
+
+        root_btn = QPushButton(f"{'Active' if root_open else 'Ready'} · Root\n{Path.home()}")
+        root_btn.setObjectName("device_card")
+        root_btn.setCheckable(True)
+        root_btn.setChecked(root_open)
+        root_btn.setEnabled(root_open or can_open)
+        root_btn.setToolTip("Close root folder panel" if root_open else "Open root folder panel")
+        root_btn.installEventFilter(self)
+        self._style_device_card(root_btn, "Root")
+        root_btn.clicked.connect(lambda _=False: self._open_root_card())
+        self.device_strip_layout.addWidget(root_btn)
+
+        for serial, model in devices.items():
+            is_open = serial in opened
+            btn = QPushButton(f"{'Active' if is_open else 'Ready'} · {model or 'Android Device'}\n{serial}")
+            btn.setObjectName("device_card")
+            btn.setCheckable(True)
+            btn.setChecked(is_open)
+            btn.setEnabled(is_open or can_open)
+            btn.setToolTip("Close panel" if is_open else "Open device panel")
+            btn.installEventFilter(self)
+            self._style_device_card(btn, model or "Android Device")
+            btn.clicked.connect(lambda _, s=serial, m=model: self._open_device_card(s, m))
+            self.device_strip_layout.addWidget(btn)
+
+        self.device_strip_layout.addStretch()
+        QTimer.singleShot(0, lambda v=scroll_x: bar.setValue(min(v, bar.maximum())))
+
+    def _open_device_card(self, serial, model):
+        for panel in self.device_panels:
+            if panel.device_serial == serial:
+                self._close_panel(panel)
+                return
+        self._add_panel_for_device(serial, model)
+
+    def _open_root_card(self):
+        for panel in self.device_panels:
+            if panel.device_serial == LocalFileHandler.device_serial:
+                self._close_panel(panel)
+                return
+        if self._panel_limit_reached():
+            return
+        panel = DevicePanel(
+            self.splitter,
+            LocalFileHandler(),
+            device_info={"model": "Root"},
+            start_path=str(Path.home()),
+        )
+        self.splitter.addWidget(panel)
+        self.device_panels.append(panel)
+        panel.cross_device_drop.connect(self._on_cross_device_drop)
+        panel.close_requested.connect(lambda p=panel: self._close_panel(p))
+        self.status_label.setText(f"Added local root panel: {Path.home()}")
+        self._update_panel_count_ui()
 
     def _reconnect_drop_signals(self):
         
@@ -234,7 +409,7 @@ class MultiDeviceWindow(QMainWindow):
 
     
 
-    def _on_cross_device_drop(self, src_serial, paths, dest_path):
+    def _on_cross_device_drop(self, src_serial, paths, dest_path, move=False):
         
         dest_panel = self.sender()
         if not isinstance(dest_panel, DevicePanel):
@@ -251,17 +426,35 @@ class MultiDeviceWindow(QMainWindow):
             self.status_label.setText("Source device panel not found")
             return
 
-        self._stream_items(src_panel, dest_panel, paths)
+        self._stream_items(src_panel, dest_panel, paths, move, dest_path)
 
-    def _stream_items(self, src_panel, dest_panel, paths):
+    def _stream_items(self, src_panel, dest_panel, paths, move=False, dest_dir=None):
         def run():
             for path in paths:
                 name = path.rstrip('/').split('/')[-1]
-                dest = f"{dest_panel.current_path.rstrip('/')}/{name}"
-                
+                dest = f"{(dest_dir or dest_panel.current_path).rstrip('/')}/{name}"
+
+                if isinstance(src_panel.adb_handler, LocalFileHandler):
+                    dest_panel.adb_handler.create_folder(dest_panel.current_path)
+                    ok = dest_panel.adb_handler.push_file(path, dest)
+                    if ok and move:
+                        shutil.rmtree(path) if Path(path).is_dir() else Path(path).unlink(missing_ok=True)
+                    if not ok:
+                        return False
+                    continue
+
                 test_cmd = ['adb', '-s', src_panel.device_serial, 'exec-out', 'test', '-d', path]
                 test_r = subprocess.run(test_cmd, capture_output=True, timeout=10)
                 is_dir = test_r.returncode == 0
+
+                if isinstance(dest_panel.adb_handler, LocalFileHandler):
+                    Path(dest).parent.mkdir(parents=True, exist_ok=True)
+                    ok = src_panel.adb_handler.pull_file(path, dest)
+                    if ok and move:
+                        src_panel.adb_handler.delete_item(path, is_dir)
+                    if not ok:
+                        return False
+                    continue
 
                 if is_dir:
                     ok = src_panel.adb_handler.stream_directory(
@@ -279,18 +472,23 @@ class MultiDeviceWindow(QMainWindow):
 
         def on_done(ok):
             if ok:
-                self.status_label.setText("Stream complete")
+                self.status_label.setText("Move complete" if move else "Copy complete")
+                src_panel.refresh_files()
                 dest_panel.refresh_files()
             else:
-                self.status_label.setText("Stream failed")
+                on_error()
 
-        self._run_modal(f"Stream to {dest_panel.device_name}", run, on_done=on_done)
+        def on_error():
+            err = src_panel.adb_handler.last_error or dest_panel.adb_handler.last_error or ""
+            self.status_label.setText((("Move failed" if move else "Copy failed") + (f": {err}" if err else ""))[:180])
+
+        self._run_modal(f"{'Move' if move else 'Copy'} to {dest_panel.device_name}", run, on_done=on_done, on_error=on_error)
 
     
 
     def _target_panel(self):
         for p in self.device_panels:
-            if p.adb_handler.device_connected:
+            if isinstance(p.adb_handler, ADBHandler) and p.adb_handler.device_connected:
                 return p
         return None
 
@@ -370,8 +568,29 @@ class MultiDeviceWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl("https://github.com/JSleim/adb-file-explorer/releases"))
 
     def _toggle_theme(self, dark):
+        self._dark = dark
         _save_theme(dark)
         QApplication.instance().setStyleSheet(DARK if dark else LIGHT)
+        if hasattr(self, "dark_mode_action"):
+            self.dark_mode_action.blockSignals(True)
+            self.dark_mode_action.setChecked(dark)
+            self.dark_mode_action.blockSignals(False)
+        if hasattr(self, "theme_btn"):
+            self.theme_btn.blockSignals(True)
+            self.theme_btn.setChecked(dark)
+            self.theme_btn.blockSignals(False)
+        self._update_topbar_icons()
+        self._repolish_topbar()
+        self._refresh_device_cards()
+
+    def _update_topbar_icons(self):
+        if hasattr(self, "refresh_devices_btn"):
+            refresh = "refresh-dark.svg" if self._dark else "refresh-light.svg"
+            self.refresh_devices_btn.setIcon(QIcon(str(get_resource_dir() / "assets" / refresh)))
+        if hasattr(self, "theme_btn"):
+            icon = "sun.svg" if self._dark else "moon.svg"
+            self.theme_btn.setIcon(QIcon(str(get_resource_dir() / "assets" / icon)))
+            self.theme_btn.setText("")
 
     
 
@@ -386,6 +605,7 @@ class MultiDeviceWindow(QMainWindow):
                 else:
                     panel.status_label.setText("Reconnected")
                     panel.refresh_files()
+        self._refresh_device_cards()
 
     
 

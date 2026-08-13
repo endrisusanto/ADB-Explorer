@@ -9,6 +9,8 @@ import zipfile
 import os
 import tempfile
 import json
+from datetime import datetime
+from pathlib import Path
 
 @dataclass
 class FileItem:
@@ -18,6 +20,39 @@ class FileItem:
     size: int
     permissions: str
     date_modified: str
+
+
+class LocalFileHandler:
+    device_serial = "local-root"
+    devices = {device_serial: "Root"}
+    device_connected = True
+    root_mode = None
+    last_error = None
+
+    def check_adb_connection(self) -> bool:
+        return True
+
+    def list_directory(self, path: str, use_root: bool = False) -> List[FileItem]:
+        items = []
+        try:
+            for entry in Path(path).iterdir():
+                try:
+                    st = entry.stat()
+                except OSError:
+                    continue
+                items.append(FileItem(
+                    name=entry.name,
+                    path=str(entry),
+                    is_dir=entry.is_dir(),
+                    size=st.st_size,
+                    permissions=oct(st.st_mode & 0o777),
+                    date_modified=datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                ))
+        except OSError as e:
+            self.last_error = str(e)
+            return []
+        return items
+
 
 class ADBHandler:
     _active_streams = {}
@@ -440,9 +475,11 @@ class ADBHandler:
             self._active_process = process
             stdout, stderr = process.communicate()
             self._active_process = None
+            self.last_error = stderr.decode("utf-8", errors="replace").strip() if process.returncode else None
             return process.returncode == 0
         except Exception as e:
             self.logger.error(f"Error pulling file/folder: {e}")
+            self.last_error = str(e)
             return False
 
     def _run_transfer_streaming(self, command, progress_callback=None, line_callback=None):

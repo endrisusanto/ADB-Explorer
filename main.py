@@ -1,13 +1,20 @@
 import sys
+from pathlib import Path
 
 from suppress_console import suppress_console
 suppress_console()
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtGui import QIcon
 
 from logging_config import setup_logging
 from ui.theme import LIGHT
 from ui.multi_device_window import MultiDeviceWindow
+
+
+def resource_path(path):
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    return base / path
 
 
 def main():
@@ -19,6 +26,7 @@ def main():
 
         app.setApplicationName("ADB Explorer")
         app.setApplicationVersion("1.0.0")
+        app.setWindowIcon(QIcon(str(resource_path("assets/logo.svg"))))
         app.setQuitOnLastWindowClosed(True)
 
         app.setStyleSheet(LIGHT)

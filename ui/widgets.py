@@ -68,7 +68,7 @@ class DropTreeView(QTreeView):
             
             my_serial = self._get_device_serial()
             if src_serial != my_serial and my_serial:
-                self._handle_cross_device_drop(src_serial, paths, dest)
+                self._handle_cross_device_drop(src_serial, paths, dest, event.dropAction() == Qt.DropAction.MoveAction)
                 event.acceptProposedAction()
                 return
 
@@ -91,10 +91,10 @@ class DropTreeView(QTreeView):
                 dest = f"{self.main_window.current_path.rstrip('/')}/{name}"
         return dest
 
-    def _handle_cross_device_drop(self, src_serial, paths, dest_path):
+    def _handle_cross_device_drop(self, src_serial, paths, dest_path, move=False):
         
         if hasattr(self.main_window, 'cross_device_drop'):
-            self.main_window.cross_device_drop.emit(src_serial, paths, dest_path)
+            self.main_window.cross_device_drop.emit(src_serial, paths, dest_path, move)
         else:
             
             window = self.window()
@@ -124,7 +124,7 @@ class DropTreeView(QTreeView):
         md.setData(ADB_MIME, "\n".join(data_lines).encode("utf-8"))
         drag = QDrag(self)
         drag.setMimeData(md)
-        drag.exec(Qt.DropAction.CopyAction)
+        drag.exec(Qt.DropAction.CopyAction | Qt.DropAction.MoveAction)
 
     def _handle_internal_drop(self, paths, dest):
         if not paths:

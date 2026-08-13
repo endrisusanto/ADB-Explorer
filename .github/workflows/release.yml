@@ -1,0 +1,105 @@
+name: Build Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install tools
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          choco install nsis wixtoolset --no-progress -y
+      - name: Build portable exe
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name "ADB Explorer" --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import logging.handlers --add-data "assets;assets" --clean --log-level ERROR main.py
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          $version = Get-Content VERSION
+          makensis /DVERSION=$version packaging\nsis\installer.nsi
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $version = Get-Content VERSION
+          $wxs = @"
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*" Name="ADB Explorer" Language="1033" Version="$version" Manufacturer="endrisusanto" UpgradeCode="9F671495-3517-40B3-9C46-D6FCAC4AB3B2">
+              <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+              <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+              <MediaTemplate />
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFilesFolder">
+                  <Directory Id="INSTALLFOLDER" Name="ADB Explorer" />
+                </Directory>
+              </Directory>
+              <DirectoryRef Id="INSTALLFOLDER">
+                <Component Id="AppExe" Guid="*">
+                  <File Id="AppExeFile" Source="dist\ADB Explorer.exe" KeyPath="yes" />
+                </Component>
+              </DirectoryRef>
+              <Feature Id="DefaultFeature" Level="1">
+                <ComponentRef Id="AppExe" />
+              </Feature>
+            </Product>
+          </Wix>
+          "@
+          Set-Content installer.wxs $wxs
+          candle.exe installer.wxs
+          light.exe -o "dist\ADB-Explorer-$version.msi" installer.wixobj
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/ADB Explorer.exe
+            dist/*.msi
+            dist/*setup.exe
+      - name: Publish Windows assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ADB Explorer.exe
+            dist/*.msi
+            dist/*setup.exe
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+      - name: Build deb and rpm
+        run: bash packaging/linux/build-linux-packages.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.deb
+            dist/*.rpm
+      - name: Publish Linux assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.deb
+            dist/*.rpm

@@ -13,7 +13,7 @@ from PyQt6.QtCore import QStringListModel
 from PyQt6.QtWidgets import QCompleter
 from PyQt6.QtCore import Qt, QTimer, QFileInfo, pyqtSignal, QPoint
 
-from handler import ADBHandler
+from handler import ADBHandler, LocalFileHandler
 from ui.widgets import DropTreeView
 from ui.task_manager import WorkerThread
 
@@ -55,10 +55,10 @@ class PathInput(QLineEdit):
 
 class DevicePanel(QWidget):
 
-    cross_device_drop = pyqtSignal(str, list, str)
+    cross_device_drop = pyqtSignal(str, list, str, bool)
     close_requested = pyqtSignal()
 
-    def __init__(self, parent, adb_handler, device_info=None):
+    def __init__(self, parent, adb_handler, device_info=None, start_path="/storage/emulated/0", use_root=False):
         super().__init__(parent)
         self.adb_handler = adb_handler
         self.device_info = device_info or {}
@@ -68,7 +68,7 @@ class DevicePanel(QWidget):
         self.clipboard = {'items': [], 'operation': None}
 
         
-        self.use_root = False
+        self.use_root = use_root
         self._loading = False
         self._refresh_pending = False
         self._refresh_task = None
@@ -82,7 +82,7 @@ class DevicePanel(QWidget):
 
         
         self.root_path = "/"
-        self.current_path = "/storage/emulated/0"
+        self.current_path = start_path
         self.path_history = [self.current_path]
         self.all_files = []
 
@@ -555,7 +555,12 @@ class DevicePanel(QWidget):
         def run_stream():
             for item in items:
                 dest = f"{target_panel.current_path.rstrip('/')}/{item['name']}"
-                if item['is_dir']:
+                if isinstance(target_panel.adb_handler, LocalFileHandler):
+                    ok = self.adb_handler.pull_file(item['path'], dest)
+                elif isinstance(self.adb_handler, LocalFileHandler):
+                    target_panel.adb_handler.create_folder(target_panel.current_path)
+                    ok = target_panel.adb_handler.push_file(item['path'], dest)
+                elif item['is_dir']:
                     ok = self.adb_handler.stream_directory(
                         self.device_serial, item['path'],
                         target_panel.device_serial, dest,

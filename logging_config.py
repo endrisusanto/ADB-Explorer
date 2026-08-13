@@ -4,7 +4,8 @@ from logging.handlers import RotatingFileHandler
 
 
 def setup_logging():
-    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+    state_home = os.environ.get("XDG_STATE_HOME", os.path.join(os.path.expanduser("~"), ".local", "state"))
+    log_dir = os.path.join(state_home, "adb-file-explorer", "logs")
     os.makedirs(log_dir, exist_ok=True)
 
     logger = logging.getLogger('ADBExplorer')

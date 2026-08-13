@@ -195,6 +195,35 @@ QToolBar QToolButton:pressed {
 QToolBar QToolButton:disabled {
     color: #ccc;
 }
+#device_strip {
+    border: none;
+    background: transparent;
+}
+QPushButton#device_card {
+    min-width: 150px;
+    max-width: 190px;
+    min-height: 36px;
+    padding: 4px 8px;
+    text-align: left;
+    border-radius: 6px;
+    background: #ffffff;
+    border: 1px solid #d0d8e4;
+    color: #243447;
+}
+QPushButton#device_card:hover {
+    background: #f0f7ff;
+    border-color: #4a8fe0;
+}
+QPushButton#device_card:checked,
+QPushButton#device_card:disabled {
+    background: #e8f1fb;
+    border-color: #4a8fe0;
+    color: #667085;
+}
+QLabel#device_empty {
+    color: #888;
+    padding: 0 8px;
+}
 
 /* ── Task manager (floating panel) ──────────────────────── */
 #task_manager {
@@ -347,6 +376,95 @@ QListWidget#device_picker {
 QListWidget#device_picker::item { padding: 8px 10px; margin: 2px 4px; border-radius: 4px; }
 QListWidget#device_picker::item:hover { background: #eef4fb; }
 QListWidget#device_picker::item:selected { background: #dbeafe; color: #1d4ed8; }
+
+/* ── Modern topbar / device cards ──────────────────────── */
+QMainWindow, QWidget#app_root {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #ffffff, stop:0.38 #f8fbff, stop:1 #f5f7fb);
+}
+QWidget {
+    font-family: "Inter", "Segoe UI Variable", "Segoe UI", "Helvetica Neue", sans-serif;
+}
+QWidget#main_topbar {
+    background: rgba(255, 255, 255, 222);
+    border-bottom: 1px solid rgba(209, 213, 219, 150);
+}
+QScrollArea#device_strip {
+    border: none;
+    background: transparent;
+}
+QPushButton#device_card {
+    min-width: 210px;
+    max-width: 220px;
+    min-height: 38px;
+    max-height: 40px;
+    padding: 6px 12px;
+    text-align: left;
+    border-radius: 14px;
+    background: #ffffff;
+    border: 1px solid #dbe3ef;
+    color: #334155;
+}
+QPushButton#device_card:hover {
+    background: #f8fbff;
+    border-color: #2563eb;
+    color: #0f172a;
+}
+QPushButton#device_card:checked {
+    background: #16a34a;
+    border-color: #16a34a;
+    color: #ffffff;
+}
+QWidget#topbar_actions {
+    background: rgba(255, 255, 255, 180);
+    border: 1px solid #dbe3ef;
+    border-radius: 14px;
+}
+QLabel#device_count_badge,
+QPushButton#icon_badge {
+    min-width: 36px;
+    max-width: 36px;
+    min-height: 36px;
+    max-height: 36px;
+    border-radius: 10px;
+    border: 1px solid #dbe3ef;
+    background: #ffffff;
+    color: #2563eb;
+    font-weight: 700;
+    padding: 0;
+}
+QLabel#device_count_badge {
+    qproperty-alignment: AlignCenter;
+    color: #64748b;
+}
+QPushButton#icon_badge:hover {
+    background: #eff6ff;
+    border-color: #2563eb;
+}
+QPushButton#icon_badge:checked {
+    background: #09090b;
+    border-color: #09090b;
+    color: #f4f4f5;
+}
+QPushButton,
+QLineEdit,
+QMenu {
+    border-radius: 10px;
+}
+QCheckBox::indicator {
+    border-radius: 6px;
+}
+QWidget#app_root,
+QWidget#main_topbar,
+QScrollArea#device_strip,
+QScrollArea#device_strip QWidget,
+QSplitter {
+    background: transparent;
+}
+QTreeView {
+    background: transparent;
+    alternate-background-color: rgba(255, 255, 255, 72);
+}
 """
 DARK = """
 /* ── Root / Global ─────────────────────────────────────── */
@@ -551,6 +669,35 @@ QToolBar QToolButton:pressed {
 QToolBar QToolButton:disabled {
     color: #585b70;
 }
+#device_strip {
+    border: none;
+    background: transparent;
+}
+QPushButton#device_card {
+    min-width: 150px;
+    max-width: 190px;
+    min-height: 36px;
+    padding: 4px 8px;
+    text-align: left;
+    border-radius: 6px;
+    background: #1e1e2e;
+    border: 1px solid #45475a;
+    color: #cdd6f4;
+}
+QPushButton#device_card:hover {
+    background: #313244;
+    border-color: #89b4fa;
+}
+QPushButton#device_card:checked,
+QPushButton#device_card:disabled {
+    background: #313244;
+    border-color: #89b4fa;
+    color: #a6adc8;
+}
+QLabel#device_empty {
+    color: #6c7086;
+    padding: 0 8px;
+}
 
 /* ── Task manager (floating panel) ──────────────────────── */
 #task_manager {
@@ -703,4 +850,93 @@ QListWidget#device_picker {
 }
 QListWidget#device_picker::item { padding: 8px 10px; margin: 2px 4px; border-radius: 4px; }
 QListWidget#device_picker::item:hover { background: #313244; }
-QListWidget#device_picker::item:selected { background: #45475a; color: #89b4fa; }"""
+QListWidget#device_picker::item:selected { background: #45475a; color: #89b4fa; }
+
+/* ── Modern topbar / device cards ──────────────────────── */
+QMainWindow, QWidget#app_root {
+    background: qradialgradient(cx:0.08, cy:0.0, radius:0.85,
+        fx:0.08, fy:0.0, stop:0 rgba(37, 99, 235, 55), stop:0.34 #0b0b0c, stop:1 #0b0b0c);
+}
+QWidget {
+    font-family: "Inter", "Segoe UI Variable", "Segoe UI", "Helvetica Neue", sans-serif;
+}
+QWidget#main_topbar {
+    background: rgba(20, 20, 22, 226);
+    border-bottom: 1px solid #27272a;
+}
+QScrollArea#device_strip {
+    border: none;
+    background: transparent;
+}
+QPushButton#device_card {
+    min-width: 210px;
+    max-width: 220px;
+    min-height: 38px;
+    max-height: 40px;
+    padding: 6px 12px;
+    text-align: left;
+    border-radius: 14px;
+    background: #141416;
+    border: 1px solid #27272a;
+    color: #f4f4f5;
+}
+QPushButton#device_card:hover {
+    background: #18181b;
+    border-color: #2563eb;
+    color: #f4f4f5;
+}
+QPushButton#device_card:checked {
+    background: #16a34a;
+    border-color: #16a34a;
+    color: #ffffff;
+}
+QWidget#topbar_actions {
+    background: rgba(20, 20, 22, 210);
+    border: 1px solid #27272a;
+    border-radius: 14px;
+}
+QLabel#device_count_badge,
+QPushButton#icon_badge {
+    min-width: 36px;
+    max-width: 36px;
+    min-height: 36px;
+    max-height: 36px;
+    border-radius: 10px;
+    border: 1px solid #27272a;
+    background: #141416;
+    color: #f4f4f5;
+    font-weight: 700;
+    padding: 0;
+}
+QLabel#device_count_badge {
+    qproperty-alignment: AlignCenter;
+    color: #a1a1aa;
+}
+QPushButton#icon_badge:hover {
+    border-color: #2563eb;
+}
+QPushButton#icon_badge:checked {
+    background: #f4f4f5;
+    border-color: #f4f4f5;
+    color: #09090b;
+}
+QPushButton,
+QLineEdit,
+QMenu {
+    border-radius: 10px;
+}
+QCheckBox::indicator {
+    border-radius: 6px;
+}
+QWidget#app_root,
+QWidget#main_topbar,
+QScrollArea#device_strip,
+QScrollArea#device_strip QWidget,
+QSplitter {
+    background: transparent;
+}
+QTreeView {
+    background: transparent;
+    alternate-background-color: rgba(20, 20, 22, 120);
+}
+"""
