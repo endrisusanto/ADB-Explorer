@@ -31,7 +31,7 @@ jobs:
         shell: pwsh
         run: |
           $version = Get-Content VERSION
-          makensis /DVERSION=$version packaging\nsis\installer.nsi
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /DVERSION=$version packaging\nsis\installer.nsi
       - name: Build MSI
         shell: pwsh
         run: |
@@ -59,8 +59,8 @@ jobs:
           </Wix>
           "@
           Set-Content installer.wxs $wxs
-          candle.exe installer.wxs
-          light.exe -o "dist\ADB-Explorer-$version.msi" installer.wixobj
+          & "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin\candle.exe" installer.wxs
+          & "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin\light.exe" -o "dist\ADB-Explorer-$version.msi" installer.wixobj
       - uses: actions/upload-artifact@v4
         with:
           name: windows
