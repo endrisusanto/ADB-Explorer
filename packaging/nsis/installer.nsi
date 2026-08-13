@@ -3,7 +3,7 @@
 !endif
 
 Name "ADB Explorer"
-OutFile "dist\ADB-Explorer-${VERSION}-setup.exe"
+OutFile "..\..\dist\ADB-Explorer-${VERSION}-setup.exe"
 InstallDir "$PROGRAMFILES64\ADB Explorer"
 RequestExecutionLevel admin
 
@@ -14,8 +14,8 @@ UninstPage instfiles
 
 Section "Install"
   SetOutPath "$INSTDIR"
-  File "dist\ADB-Explorer.exe"
-  File /nonfatal "assets\logo.svg"
+  File "..\..\dist\ADB-Explorer.exe"
+  File /nonfatal "..\..\assets\logo.svg"
   CreateShortcut "$DESKTOP\ADB Explorer.lnk" "$INSTDIR\ADB-Explorer.exe"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 SectionEnd
