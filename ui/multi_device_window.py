@@ -2,6 +2,8 @@ import os
 import sys
 import hashlib
 import shutil
+import re
+import time
 from pathlib import Path
 import subprocess
 import configparser
@@ -46,6 +48,15 @@ def _model_color(model):
 def _soft_color(color):
     r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
     return f"rgba({r}, {g}, {b}, 42)"
+
+
+def _format_size(bytes_size):
+    bytes_size = float(bytes_size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if bytes_size < 1024.0:
+            return f"{bytes_size:.1f} {unit}"
+        bytes_size /= 1024.0
+    return f"{bytes_size:.1f} TB"
 
 
 def _card_shadow(color, dark):
@@ -429,14 +440,19 @@ class MultiDeviceWindow(QMainWindow):
         self._stream_items(src_panel, dest_panel, paths, move, dest_path)
 
     def _stream_items(self, src_panel, dest_panel, paths, move=False, dest_dir=None):
+        from ui.task_manager import WorkerThread
+        task = None
+
         def run():
             for path in paths:
                 name = path.rstrip('/').split('/')[-1]
                 dest = f"{(dest_dir or dest_panel.current_path).rstrip('/')}/{name}"
+                size = Path(path).stat().st_size if isinstance(src_panel.adb_handler, LocalFileHandler) and Path(path).is_file() else 0
+                task.status_changed.emit(f"file={name}" + (f"|size={size}" if size else ""))
 
                 if isinstance(src_panel.adb_handler, LocalFileHandler):
                     dest_panel.adb_handler.create_folder(dest_panel.current_path)
-                    ok = dest_panel.adb_handler.push_file(path, dest)
+                    ok = dest_panel.adb_handler.push_file_streaming(path, dest, line_callback=task.status_changed.emit)
                     if ok and move:
                         shutil.rmtree(path) if Path(path).is_dir() else Path(path).unlink(missing_ok=True)
                     if not ok:
@@ -446,10 +462,19 @@ class MultiDeviceWindow(QMainWindow):
                 test_cmd = ['adb', '-s', src_panel.device_serial, 'exec-out', 'test', '-d', path]
                 test_r = subprocess.run(test_cmd, capture_output=True, timeout=10)
                 is_dir = test_r.returncode == 0
+                if not is_dir:
+                    stat_r = subprocess.run(
+                        ['adb', '-s', src_panel.device_serial, 'exec-out', 'stat', '-c%s', path],
+                        capture_output=True, timeout=10,
+                    )
+                    if stat_r.returncode == 0:
+                        size = stat_r.stdout.decode("utf-8", errors="replace").strip()
+                        if size.isdigit():
+                            task.status_changed.emit(f"file={name}|size={size}")
 
                 if isinstance(dest_panel.adb_handler, LocalFileHandler):
                     Path(dest).parent.mkdir(parents=True, exist_ok=True)
-                    ok = src_panel.adb_handler.pull_file(path, dest)
+                    ok = src_panel.adb_handler.pull_file_streaming(path, dest, line_callback=task.status_changed.emit)
                     if ok and move:
                         src_panel.adb_handler.delete_item(path, is_dir)
                     if not ok:
@@ -460,6 +485,7 @@ class MultiDeviceWindow(QMainWindow):
                     ok = src_panel.adb_handler.stream_directory(
                         src_panel.device_serial, path,
                         dest_panel.device_serial, dest,
+                        line_callback=task.status_changed.emit,
                     )
                 else:
                     ok = src_panel.adb_handler.stream_file(
@@ -482,7 +508,8 @@ class MultiDeviceWindow(QMainWindow):
             err = src_panel.adb_handler.last_error or dest_panel.adb_handler.last_error or ""
             self.status_label.setText((("Move failed" if move else "Copy failed") + (f": {err}" if err else ""))[:180])
 
-        self._run_modal(f"{'Move' if move else 'Copy'} to {dest_panel.device_name}", run, on_done=on_done, on_error=on_error)
+        task = WorkerThread(f"{'Move' if move else 'Copy'} to {dest_panel.device_name}", run)
+        self._run_modal(f"{'Move' if move else 'Copy'} to {dest_panel.device_name}", task=task, on_done=on_done, on_error=on_error)
 
     
 
@@ -609,25 +636,64 @@ class MultiDeviceWindow(QMainWindow):
 
     
 
-    def _run_modal(self, title, fn, *args, on_done=None, on_error=None, refresh=False):
+    def _run_modal(self, title, fn=None, *args, on_done=None, on_error=None, refresh=False, task=None):
         from ui.task_manager import WorkerThread
         from PyQt6.QtWidgets import QProgressBar, QPushButton
 
-        task = WorkerThread(title, fn, *args)
+        task = task or WorkerThread(title, fn, *args)
+        started_at = time.monotonic()
 
         dlg = QDialog(self)
-        dlg.setWindowTitle(title)
+        dlg.setObjectName("transfer_dialog")
+        dlg.setWindowTitle(f"{title} · Transfer Statistics")
         dlg.setWindowModality(Qt.WindowModality.WindowModal)
-        dlg.setFixedSize(360, 130)
+        dlg.setFixedSize(520, 260)
+        dlg.setStyleSheet("""
+            QDialog#transfer_dialog {
+                background: #141416;
+                color: #f4f4f5;
+            }
+            QDialog#transfer_dialog QLabel#transfer_title {
+                font-weight: 700;
+                font-size: 13px;
+                color: #f4f4f5;
+            }
+            QDialog#transfer_dialog QLabel#transfer_stat {
+                color: #a1a1aa;
+                padding: 1px 0;
+            }
+            QDialog#transfer_dialog QProgressBar {
+                min-height: 12px;
+                border: 1px solid #27272a;
+                border-radius: 6px;
+                background: #09090b;
+                text-align: center;
+                color: #f4f4f5;
+            }
+            QDialog#transfer_dialog QProgressBar::chunk {
+                border-radius: 6px;
+                background: #2563eb;
+            }
+        """)
         layout = QVBoxLayout(dlg)
         layout.setContentsMargins(16, 16, 16, 16)
 
         label = QLabel(f"{title}...")
+        label.setObjectName("transfer_title")
         layout.addWidget(label)
 
         bar = QProgressBar()
         bar.setRange(0, 0)
         layout.addWidget(bar)
+
+        filename_label = QLabel("Filename: -")
+        size_label = QLabel("Size: -")
+        speed_label = QLabel("Speed: -")
+        eta_label = QLabel("ETA: -")
+        for stat_label in (filename_label, size_label, speed_label, eta_label):
+            stat_label.setObjectName("transfer_stat")
+            stat_label.setTextFormat(Qt.TextFormat.PlainText)
+            layout.addWidget(stat_label)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -665,6 +731,51 @@ class MultiDeviceWindow(QMainWindow):
 
         cancel_btn.clicked.connect(cancel_task)
 
+        def update_progress(line):
+            if not line:
+                return
+            if line.startswith("file="):
+                parts = dict(part.split("=", 1) for part in line.split("|") if "=" in part)
+                filename_label.setText(f"Filename: {parts.get('file', '-')}")
+                if "size" in parts:
+                    size_label.setText(f"Size: {_format_size(int(parts['size']))}")
+                return
+            if line.startswith("stat="):
+                parts = dict(part.split("=", 1) for part in line.split("|") if "=" in part)
+                done = int(float(parts.get("stat", 0)))
+                total = int(float(parts.get("total", 0)))
+                speed_value = float(parts.get("speed", 0))
+                pct = int(done * 100 / total) if total else 0
+                bar.setRange(0, 100)
+                bar.setValue(min(100, pct))
+                size_label.setText(f"Size: {_format_size(done)} / {_format_size(total)}")
+                speed_label.setText(f"Speed: {_format_size(speed_value)}/s")
+                eta_label.setText(f"ETA: {parts.get('eta', '0')}s")
+                return
+            percent = re.search(r'(?:\[?\s*|: )(\d{1,3})%\]?\s*(.*)', line)
+            speed = re.search(r'([\d.]+\s*[KMGTP]?B/s)', line)
+            done = re.search(r'([\d.]+\s*[KMGTP]?B/s).*\((\d+) bytes in ([\d.]+)s\)', line)
+            if percent:
+                pct = min(100, int(percent.group(1)))
+                name = os.path.basename(percent.group(2).strip()) or title
+                elapsed = max(time.monotonic() - started_at, 0.1)
+                eta = int(elapsed * (100 - pct) / pct) if pct else 0
+                bar.setRange(0, 100)
+                bar.setValue(pct)
+                label.setText(name)
+                filename_label.setText(f"Filename: {name}")
+                eta_label.setText(f"ETA: {eta}s")
+                if speed:
+                    speed_label.setText(f"Speed: {speed.group(1)}")
+            elif done:
+                bar.setRange(0, 100)
+                bar.setValue(100)
+                size_label.setText(f"Size: {_format_size(int(done.group(2)))}")
+                speed_label.setText(f"Speed: {done.group(1)}")
+                eta_label.setText(f"ETA: done in {done.group(3)}s")
+            else:
+                filename_label.setText(f"Filename: {line[:140]}")
+
         def handle_finished(val):
             completed[0] = True
             if dlg.isVisible():
@@ -692,6 +803,7 @@ class MultiDeviceWindow(QMainWindow):
 
         task.finished_signal.connect(handle_finished)
         task.error_signal.connect(handle_error)
+        task.status_changed.connect(update_progress)
         dlg.show()
         task.start()
         return task

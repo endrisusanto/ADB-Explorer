@@ -6,29 +6,47 @@ APP_NAME="ADB Explorer"
 VERSION="1.0.0"
 ARCH="$(dpkg --print-architecture)"
 ROOT="build/deb/${APP_ID}_${VERSION}_${ARCH}"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/uv-cache}"
 
 python3 - <<'PY'
 from pathlib import Path
 from shutil import rmtree
 
-for path in ("build", "dist", ".venv-build"):
+for path in ("build",):
     p = Path(path)
     if p.exists():
         rmtree(p)
 PY
 
-if command -v uv >/dev/null 2>&1; then
-  uv venv .venv-build
-else
-  python3 -m venv .venv-build
+if [ ! -x .venv-build/bin/python ]; then
+  if command -v uv >/dev/null 2>&1; then
+    uv venv .venv-build
+  else
+    python3 -m venv .venv-build
+  fi
 fi
 . .venv-build/bin/activate
-if python -m pip --version >/dev/null 2>&1; then
+if python - <<'PY' >/dev/null 2>&1
+import PyInstaller, PyQt6
+PY
+then
+  :
+elif python -m pip --version >/dev/null 2>&1; then
   python -m pip install --upgrade pip
   python -m pip install -r requirements.txt
 else
   uv pip install --python "$PWD/.venv-build/bin/python" -r requirements.txt
 fi
+
+python3 - <<'PY'
+from pathlib import Path
+from shutil import rmtree
+
+for path in ("build", "dist"):
+    p = Path(path)
+    if p.exists():
+        rmtree(p)
+PY
 
 pyinstaller \
   --noconfirm \

@@ -53,6 +53,48 @@ class LocalFileHandler:
             return []
         return items
 
+    def create_folder(self, path: str) -> bool:
+        try:
+            Path(path).mkdir(parents=True, exist_ok=True)
+            self.last_error = None
+            return True
+        except OSError as e:
+            self.last_error = str(e)
+            return False
+
+    def create_file(self, path: str) -> bool:
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).touch(exist_ok=False)
+            self.last_error = None
+            return True
+        except OSError as e:
+            self.last_error = str(e)
+            return False
+
+    def delete_item(self, path: str, is_dir: bool = False) -> bool:
+        try:
+            p = Path(path)
+            if is_dir:
+                import shutil
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            self.last_error = None
+            return True
+        except OSError as e:
+            self.last_error = str(e)
+            return False
+
+    def rename_item(self, old_path: str, new_path: str) -> bool:
+        try:
+            Path(old_path).rename(new_path)
+            self.last_error = None
+            return True
+        except OSError as e:
+            self.last_error = str(e)
+            return False
+
 
 class ADBHandler:
     _active_streams = {}
@@ -482,7 +524,22 @@ class ADBHandler:
             self.last_error = str(e)
             return False
 
-    def _run_transfer_streaming(self, command, progress_callback=None, line_callback=None):
+    def _remote_size(self, path):
+        try:
+            r = subprocess.run(
+                self._build_adb_cmd(['exec-out', 'stat', '-c%s', path]),
+                capture_output=True, timeout=3,
+                startupinfo=self._make_startupinfo(),
+                creationflags=self._WIN_FLAGS,
+            )
+            if r.returncode == 0:
+                value = r.stdout.decode('utf-8', errors='replace').strip()
+                return int(value) if value.isdigit() else 0
+        except Exception:
+            pass
+        return 0
+
+    def _run_transfer_streaming(self, command, progress_path=None, total_bytes=0, remote_progress=False, line_callback=None):
         if not self.device_connected:
             return False
 
@@ -498,22 +555,49 @@ class ADBHandler:
             )
             self._active_process = process
 
-            for raw_line in iter(process.stdout.readline, b''):
-                line = raw_line.decode('utf-8', errors='replace').rstrip('\r\n')
-                if line_callback:
-                    line_callback(line)
+            last_done = 0
+            last_time = time.monotonic()
+            while process.poll() is None:
+                if progress_path and total_bytes and line_callback:
+                    done = self._remote_size(progress_path) if remote_progress else (
+                        os.path.getsize(progress_path) if os.path.exists(progress_path) else 0
+                    )
+                    now = time.monotonic()
+                    elapsed = max(now - last_time, 0.001)
+                    speed = max(0, done - last_done) / elapsed
+                    eta = int((total_bytes - done) / speed) if speed else 0
+                    line_callback(f"stat={min(done, total_bytes)}|total={total_bytes}|speed={speed:.0f}|eta={eta}")
+                    last_done, last_time = done, now
+                time.sleep(0.5)
 
-            process.wait()
+            output, _ = process.communicate()
+            if output and line_callback:
+                for line in output.decode('utf-8', errors='replace').replace('\r', '\n').splitlines():
+                    if line.strip():
+                        line_callback(line.strip())
+            if total_bytes and line_callback:
+                line_callback(f"stat={total_bytes}|total={total_bytes}|speed=0|eta=0")
             return process.returncode == 0
         except Exception as e:
             self.logger.error(f"Error during streaming transfer: {e}")
             return False
 
     def pull_file_streaming(self, remote_path, local_path, line_callback=None):
-        return self._run_transfer_streaming(['pull', remote_path, local_path], line_callback=line_callback)
+        return self._run_transfer_streaming(
+            ['pull', remote_path, local_path],
+            progress_path=local_path,
+            total_bytes=self._remote_size(remote_path),
+            line_callback=line_callback,
+        )
 
     def push_file_streaming(self, local_path, remote_path, line_callback=None):
-        return self._run_transfer_streaming(['push', local_path, remote_path], line_callback=line_callback)
+        return self._run_transfer_streaming(
+            ['push', local_path, remote_path],
+            progress_path=remote_path,
+            total_bytes=os.path.getsize(local_path) if os.path.isfile(local_path) else 0,
+            remote_progress=True,
+            line_callback=line_callback,
+        )
 
     def rename_item(self, old_path: str, new_path: str) -> bool:
         if not self.device_connected:

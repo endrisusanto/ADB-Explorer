@@ -2,6 +2,9 @@ import os
 import sys
 import tempfile
 import subprocess
+import shutil
+import re
+import time
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -154,6 +157,12 @@ class DevicePanel(QWidget):
         refresh_btn.setMaximumWidth(32)
         refresh_btn.clicked.connect(self.refresh_files)
         nav_layout.addWidget(refresh_btn)
+
+        open_files_btn = QPushButton("Files")
+        open_files_btn.setMaximumWidth(48)
+        open_files_btn.setToolTip("Open this folder in the native file manager")
+        open_files_btn.clicked.connect(self.open_current_path_in_files)
+        nav_layout.addWidget(open_files_btn)
 
         nav_container = QWidget()
         nav_container.setObjectName("panel_nav")
@@ -637,8 +646,9 @@ class DevicePanel(QWidget):
         save_path, _ = QFileDialog.getSaveFileName(self, "Save File As", filename)
         if not save_path:
             return
+        size = next((f.size for f in self.all_files if f.name == filename and not f.is_dir), 0)
         self._run_transfer("Copying file", remote_path, save_path,
-                           f"File copied: {save_path}", f"Failed to copy {filename}")
+                           f"File copied: {save_path}", f"Failed to copy {filename}", size=size)
 
     def copy_folder_to(self, foldername):
         if not self.adb_handler.device_connected:
@@ -651,13 +661,77 @@ class DevicePanel(QWidget):
         self._run_transfer("Copying folder", remote_path, local_path,
                            f"Folder copied: {local_path}", f"Failed to copy {foldername}")
 
-    def _run_transfer(self, title, src, dst, success_msg, error_msg):
-        fn = self.adb_handler.pull_file
+    def _run_transfer(self, title, src, dst, success_msg, error_msg, size=0):
+        task = None
+
+        def run():
+            task.status_changed.emit(f"file={os.path.basename(src)}" + (f"|size={size}" if size else ""))
+            return self.adb_handler.pull_file_streaming(
+                src, dst,
+                line_callback=lambda line: task.status_changed.emit(line) if task else None,
+            )
+
+        task = WorkerThread(title, run)
         self._run_modal(
-            title, fn, src, dst,
+            title, task=task,
             on_done=lambda _: self.status_label.setText(success_msg),
             on_error=lambda: self.status_label.setText(error_msg),
         )
+
+    def open_current_path_in_files(self):
+        if isinstance(self.adb_handler, LocalFileHandler):
+            if self._open_local_folder(self.current_path):
+                self.status_label.setText(f"Opened files: {self.current_path}")
+            return
+
+        safe_name = f"{self.device_serial}_{self.current_path.strip('/').replace('/', '_') or 'root'}"
+        local_path = os.path.join(tempfile.gettempdir(), "adb-file-explorer", safe_name)
+        os.makedirs(local_path, exist_ok=True)
+        if self._open_local_folder(local_path):
+            self.status_label.setText(f"Opened files: {local_path}")
+
+    def _open_local_folder(self, path):
+        path = os.path.abspath(path)
+        env = os.environ.copy()
+        for key in ("QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "QT_QPA_PLATFORM"):
+            env.pop(key, None)
+        if "LD_LIBRARY_PATH_ORIG" in env:
+            env["LD_LIBRARY_PATH"] = env["LD_LIBRARY_PATH_ORIG"]
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+        commands = (
+            ("dolphin", [path]),
+            ("kioclient5", ["exec", path]),
+            ("kioclient", ["exec", path]),
+            ("kde-open5", [path]),
+            ("kde-open", [path]),
+            ("nautilus", [path]),
+            ("xdg-open", [path]),
+        )
+        last_error = ""
+        for opener, args in commands:
+            exe = shutil.which(opener)
+            if not exe:
+                continue
+            try:
+                proc = subprocess.Popen(
+                    [exe, *args],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                    start_new_session=True,
+                )
+                time.sleep(0.7)
+                if proc.poll() not in (None, 0):
+                    stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+                    last_error = stderr.strip()
+                    continue
+                self.status_label.setText(f"Opening {opener}: {path}")
+                return True
+            except OSError as e:
+                last_error = str(e)
+        self.status_label.setText(f"Open files failed: {last_error or 'no opener found'}")
+        return False
 
     def rename_item(self, old_name):
         if not self.adb_handler.device_connected:
@@ -768,7 +842,17 @@ class DevicePanel(QWidget):
             return
         filename = os.path.basename(file_path)
         remote = f"{self.current_path.rstrip('/')}/{filename}"
-        self._run_modal("Uploading", self.adb_handler.push_file, file_path, remote,
+        task = None
+
+        def run():
+            task.status_changed.emit(f"file={filename}|size={os.path.getsize(file_path)}")
+            return self.adb_handler.push_file_streaming(
+                file_path, remote,
+                line_callback=lambda line: task.status_changed.emit(line) if task else None,
+            )
+
+        task = WorkerThread("Uploading", run)
+        self._run_modal("Uploading", task=task,
                         on_done=lambda _: self.status_label.setText(f"Uploaded {filename}"),
                         on_error=lambda: self.status_label.setText(f"Failed to upload {filename}"))
 
@@ -781,6 +865,7 @@ class DevicePanel(QWidget):
             count = 0
             for file_path, rel_dir in files:
                 filename = os.path.basename(file_path)
+                task.status_changed.emit(f"{count + 1}/{total} · {filename}")
                 if rel_dir and rel_dir != ".":
                     remote_dir = f"{self.current_path.rstrip('/')}/{rel_dir}".replace("\\", "/")
                 else:
@@ -788,7 +873,7 @@ class DevicePanel(QWidget):
                 if rel_dir:
                     self.adb_handler.create_folder(remote_dir)
                 remote = f"{remote_dir}/{filename}".replace("\\", "/")
-                ok = self.adb_handler.push_file(file_path, remote)
+                ok = self.adb_handler.push_file_streaming(file_path, remote, line_callback=task.status_changed.emit)
                 if not ok:
                     return count
                 count += 1
@@ -798,7 +883,8 @@ class DevicePanel(QWidget):
             self.status_label.setText(f"Uploaded {count}/{total} files")
             self.refresh_files()
 
-        self._run_modal(f"Upload {total} files", run_upload, on_done=on_done)
+        task = WorkerThread(f"Upload {total} files", run_upload)
+        self._run_modal(f"Upload {total} files", task=task, on_done=on_done)
 
     def download_selected_items(self):
         if not self.adb_handler.device_connected:
@@ -822,14 +908,16 @@ class DevicePanel(QWidget):
         def run_dl():
             count = 0
             for remote, local in pairs:
-                if self.adb_handler.pull_file(remote, local):
+                task.status_changed.emit(f"{os.path.basename(remote)}")
+                if self.adb_handler.pull_file_streaming(remote, local, line_callback=task.status_changed.emit):
                     count += 1
             return count
 
         def on_done(count):
             self.status_label.setText(f"Downloaded {count} files")
 
-        self._run_modal(f"Download {len(pairs)} files", run_dl, on_done=on_done)
+        task = WorkerThread(f"Download {len(pairs)} files", run_dl)
+        self._run_modal(f"Download {len(pairs)} files", task=task, on_done=on_done)
 
     def copy_selected_to(self):
         if not self.adb_handler.device_connected:
@@ -930,22 +1018,61 @@ class DevicePanel(QWidget):
 
     
 
-    def _run_modal(self, title, fn, *args, on_done=None, on_error=None, refresh=False):
-        task = WorkerThread(title, fn, *args)
+    def _run_modal(self, title, fn=None, *args, on_done=None, on_error=None, refresh=False, task=None):
+        task = task or WorkerThread(title, fn, *args)
+        started_at = time.monotonic()
 
         dlg = QDialog(self)
-        dlg.setWindowTitle(title)
+        dlg.setObjectName("transfer_dialog")
+        dlg.setWindowTitle(f"{title} · Transfer Statistics")
         dlg.setWindowModality(Qt.WindowModality.WindowModal)
-        dlg.setFixedSize(360, 130)
+        dlg.setFixedSize(520, 240)
+        dlg.setStyleSheet("""
+            QDialog#transfer_dialog {
+                background: #141416;
+                color: #f4f4f5;
+            }
+            QDialog#transfer_dialog QLabel#transfer_title {
+                font-weight: 700;
+                font-size: 13px;
+                color: #f4f4f5;
+            }
+            QDialog#transfer_dialog QLabel#transfer_stat {
+                color: #a1a1aa;
+                padding: 1px 0;
+            }
+            QDialog#transfer_dialog QProgressBar {
+                min-height: 12px;
+                border: 1px solid #27272a;
+                border-radius: 6px;
+                background: #09090b;
+                text-align: center;
+                color: #f4f4f5;
+            }
+            QDialog#transfer_dialog QProgressBar::chunk {
+                border-radius: 6px;
+                background: #2563eb;
+            }
+        """)
         layout = QVBoxLayout(dlg)
         layout.setContentsMargins(16, 16, 16, 16)
 
         label = QLabel(f"{title}...")
+        label.setObjectName("transfer_title")
         layout.addWidget(label)
 
         bar = QProgressBar()
         bar.setRange(0, 0)
         layout.addWidget(bar)
+
+        filename_label = QLabel("Filename: -")
+        size_label = QLabel("Size: -")
+        speed_label = QLabel("Speed: -")
+        eta_label = QLabel("ETA: -")
+        for stat_label in (filename_label, size_label, speed_label, eta_label):
+            stat_label.setObjectName("transfer_stat")
+            stat_label.setTextFormat(Qt.TextFormat.PlainText)
+            layout.addWidget(stat_label)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -962,6 +1089,51 @@ class DevicePanel(QWidget):
             dlg.close()
 
         cancel_btn.clicked.connect(cancel_task)
+
+        def update_progress(line):
+            if not line:
+                return
+            if line.startswith("file="):
+                parts = dict(part.split("=", 1) for part in line.split("|") if "=" in part)
+                filename_label.setText(f"Filename: {parts.get('file', '-')}")
+                if "size" in parts:
+                    size_label.setText(f"Size: {self.format_size(int(parts['size']))}")
+                return
+            if line.startswith("stat="):
+                parts = dict(part.split("=", 1) for part in line.split("|") if "=" in part)
+                done = int(float(parts.get("stat", 0)))
+                total = int(float(parts.get("total", 0)))
+                speed_value = float(parts.get("speed", 0))
+                pct = int(done * 100 / total) if total else 0
+                bar.setRange(0, 100)
+                bar.setValue(min(100, pct))
+                size_label.setText(f"Size: {self.format_size(done)} / {self.format_size(total)}")
+                speed_label.setText(f"Speed: {self.format_size(speed_value)}/s")
+                eta_label.setText(f"ETA: {parts.get('eta', '0')}s")
+                return
+            percent = re.search(r'(?:\[?\s*|: )(\d{1,3})%\]?\s*(.*)', line)
+            speed = re.search(r'([\d.]+\s*[KMGTP]?B/s)', line)
+            done = re.search(r'([\d.]+\s*[KMGTP]?B/s).*\((\d+) bytes in ([\d.]+)s\)', line)
+            if percent:
+                pct = min(100, int(percent.group(1)))
+                name = os.path.basename(percent.group(2).strip()) or title
+                elapsed = max(time.monotonic() - started_at, 0.1)
+                eta = int(elapsed * (100 - pct) / pct) if pct else 0
+                bar.setRange(0, 100)
+                bar.setValue(pct)
+                label.setText(name)
+                filename_label.setText(f"Filename: {name}")
+                eta_label.setText(f"ETA: {eta}s")
+                if speed:
+                    speed_label.setText(f"Speed: {speed.group(1)}")
+            elif done:
+                bar.setRange(0, 100)
+                bar.setValue(100)
+                size_label.setText(f"Size: {self.format_size(int(done.group(2)))}")
+                speed_label.setText(f"Speed: {done.group(1)}")
+                eta_label.setText(f"ETA: done in {done.group(3)}s")
+            else:
+                filename_label.setText(f"Filename: {line[:140]}")
 
         def handle_finished(val):
             completed[0] = True
@@ -986,6 +1158,7 @@ class DevicePanel(QWidget):
 
         task.finished_signal.connect(handle_finished)
         task.error_signal.connect(handle_error)
+        task.status_changed.connect(update_progress)
         dlg.show()
         task.start()
         return task
