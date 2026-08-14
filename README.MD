@@ -1,4 +1,4 @@
-
+![App](Screenshot_20260814_103143.png)
 # ADB Explorer
 A graphical file manager for Android devices connected via ADB (Android Debug Bridge). Provides an intuitive interface for managing files on Android devices without needing to use command-line ADB commands or navigate through the device's UI.
 ## Features
