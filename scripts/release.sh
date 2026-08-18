@@ -29,4 +29,3 @@ git add .
 git commit -m "Release v$next"
 git tag -a "v$next" -m "Release v$next"
 git push origin "v$next"
-git push origin HEAD:main || echo "warning: main push failed; v$next tag was pushed and should trigger release" >&2
