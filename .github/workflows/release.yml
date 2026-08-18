@@ -46,7 +46,7 @@ jobs:
             <Product Id="*" Name="ADB Explorer" Language="1033" Version="$version" Manufacturer="endrisusanto" UpgradeCode="9F671495-3517-40B3-9C46-D6FCAC4AB3B2">
               <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
               <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
-              <MediaTemplate />
+              <MediaTemplate EmbedCab="yes" />
               <Directory Id="TARGETDIR" Name="SourceDir">
                 <Directory Id="ProgramFilesFolder">
                   <Directory Id="INSTALLFOLDER" Name="ADB Explorer" />
