@@ -66,11 +66,12 @@ jobs:
           Set-Content installer.wxs $wxs
           & "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin\candle.exe" installer.wxs
           & "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin\light.exe" -o "dist\ADB-Explorer-$version.msi" installer.wixobj
+          Copy-Item "dist\ADB-Explorer.exe" "dist\ADB-Explorer-portable.exe" -Force
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
-            dist/ADB-Explorer.exe
+            dist/ADB-Explorer-portable.exe
             dist/*.msi
             dist/*setup.exe
       - name: Publish Windows assets
@@ -78,7 +79,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/ADB-Explorer.exe
+            dist/ADB-Explorer-portable.exe
             dist/*.msi
             dist/*setup.exe
 
