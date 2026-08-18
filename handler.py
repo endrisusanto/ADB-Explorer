@@ -7,10 +7,13 @@ import re
 import time
 import zipfile
 import os
+import shutil
 import tempfile
 import json
 from datetime import datetime
 from pathlib import Path
+
+ADB_EXE: str = shutil.which('adb') or 'adb'
 
 @dataclass
 class FileItem:
@@ -35,7 +38,28 @@ class LocalFileHandler:
     def list_directory(self, path: str, use_root: bool = False) -> List[FileItem]:
         items = []
         try:
-            for entry in Path(path).iterdir():
+            # Handle Windows root listing (drives) if path is "/"
+            if os.name == 'nt' and (path == '/' or path == ''):
+                import string
+                from ctypes import windll
+                drives = []
+                bitmask = windll.kernel32.GetLogicalDrives()
+                for letter in string.ascii_uppercase:
+                    if bitmask & 1:
+                        drive_path = f"{letter}:\\"
+                        drives.append(FileItem(
+                            name=f"{letter}:",
+                            path=drive_path,
+                            is_dir=True,
+                            size=0,
+                            permissions="drwxr-xr-x",
+                            date_modified="",
+                        ))
+                    bitmask >>= 1
+                return drives
+
+            target_path = Path(path)
+            for entry in target_path.iterdir():
                 try:
                     st = entry.stat()
                 except OSError:
@@ -44,7 +68,7 @@ class LocalFileHandler:
                     name=entry.name,
                     path=str(entry),
                     is_dir=entry.is_dir(),
-                    size=st.st_size,
+                    size=st.st_size if not entry.is_dir() else 0,
                     permissions=oct(st.st_mode & 0o777),
                     date_modified=datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
                 ))
@@ -75,11 +99,10 @@ class LocalFileHandler:
     def delete_item(self, path: str, is_dir: bool = False) -> bool:
         try:
             p = Path(path)
-            if is_dir:
-                import shutil
+            if is_dir or p.is_dir():
                 shutil.rmtree(p)
             else:
-                p.unlink()
+                p.unlink(missing_ok=True)
             self.last_error = None
             return True
         except OSError as e:
@@ -95,32 +118,59 @@ class LocalFileHandler:
             self.last_error = str(e)
             return False
 
+    def path_exists(self, path: str) -> bool:
+        return os.path.exists(path)
+
+    def copy_on_device(self, src_path: str, dest_path: str) -> bool:
+        try:
+            if os.path.isdir(src_path):
+                shutil.copytree(src_path, dest_path, dirs_exist_ok=True)
+            else:
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                shutil.copy2(src_path, dest_path)
+            return True
+        except Exception as e:
+            self.last_error = str(e)
+            return False
+
+    def move_on_device(self, src_path: str, dest_path: str) -> bool:
+        try:
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            shutil.move(src_path, dest_path)
+            return True
+        except Exception as e:
+            self.last_error = str(e)
+            return False
+
 
 class ADBHandler:
     _active_streams = {}
-
+    _server_started = False
     _WIN_FLAGS: int = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
-    def __init__(self, device_serial=None):
+    def __init__(self, device_serial=None, check_connection=True):
         import logging
         self.logger = logging.getLogger('ADBHandler')
 
-        self._ensure_server_started()
-
         self.device_serial = device_serial
-        self.devices = self.get_connected_devices()
-        self.device_connected = bool(self.devices)
         self.root_mode = None
         self.last_error = None
         self._active_process = None
 
-        if not self.device_connected:
-            self.logger.warning("No ADB device connected")
-        elif not device_serial and len(self.devices) == 1:
-            self.device_serial = next(iter(self.devices.keys()))
+        if check_connection:
+            self._ensure_server_started()
+            self.devices = self.get_connected_devices()
+            self.device_connected = bool(self.devices)
+            if not self.device_connected:
+                self.logger.warning("No ADB device connected")
+            elif not device_serial and len(self.devices) == 1:
+                self.device_serial = next(iter(self.devices.keys()))
+        else:
+            self.devices = {device_serial: "Android Device"} if device_serial else {}
+            self.device_connected = True
 
     def _build_adb_cmd(self, command: list, device_serial: str = None) -> list:
-        cmd = ['adb']
+        cmd = [ADB_EXE]
         serial = device_serial or self.device_serial
         if serial:
             cmd.extend(['-s', serial])
@@ -140,7 +190,7 @@ class ADBHandler:
     def _exec_mkdir(serial, remote_dir):
         try:
             subprocess.run(
-                ['adb', '-s', serial, 'exec-out', 'mkdir', '-p', remote_dir],
+                [ADB_EXE, '-s', serial, 'exec-out', 'mkdir', '-p', remote_dir],
                 capture_output=True, timeout=10,
                 startupinfo=ADBHandler._make_startupinfo(),
                 creationflags=ADBHandler._WIN_FLAGS,
@@ -149,14 +199,18 @@ class ADBHandler:
             pass
 
     def _ensure_server_started(self):
+        if ADBHandler._server_started:
+            return
         try:
-            subprocess.run(
-                ['adb', 'start-server'],
+            r = subprocess.run(
+                [ADB_EXE, 'start-server'],
                 capture_output=True,
                 timeout=15,
                 startupinfo=self._make_startupinfo(),
                 creationflags=self._WIN_FLAGS,
             )
+            if r.returncode == 0:
+                ADBHandler._server_started = True
         except Exception:
             pass
 
@@ -186,7 +240,7 @@ class ADBHandler:
         """Return the physical device serial reported by a specific ADB endpoint."""
         try:
             result = subprocess.run(
-                ['adb', '-s', serial, 'get-serialno'],
+                [ADB_EXE, '-s', serial, 'get-serialno'],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -203,7 +257,8 @@ class ADBHandler:
     def get_unique_devices(self):
         """Return one preferred ADB endpoint per physical device, preferring USB."""
         unique = {}
-        for serial, model in self.get_connected_devices().items():
+        connected = self.get_connected_devices()
+        for serial, model in connected.items():
             identity = self.get_device_identity(serial)
             candidate = (serial, model)
             current = unique.get(identity)
@@ -214,6 +269,7 @@ class ADBHandler:
     @staticmethod
     def _endpoint_priority(serial: str):
         return (':' in serial, serial)
+
     def check_adb_connection(self) -> bool:
         try:
             result = self._run_adb_command(['devices'])
@@ -232,10 +288,7 @@ class ADBHandler:
         return f'"{path}"'
 
     def _run_adb_command(self, command: list, use_shell=False, timeout=30) -> subprocess.CompletedProcess:
-        cmd = ['adb']
-        if self.device_serial:
-            cmd.extend(['-s', self.device_serial])
-        cmd.extend(command)
+        cmd = self._build_adb_cmd(command)
 
         try:
             return subprocess.run(
@@ -321,7 +374,7 @@ class ADBHandler:
         src_proc = None
         try:
             src_proc = subprocess.Popen(
-                ['adb', '-s', src_serial, 'exec-out', 'cat', src_path],
+                [ADB_EXE, '-s', src_serial, 'exec-out', 'cat', src_path],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 startupinfo=self._make_startupinfo(),
                 creationflags=self._WIN_FLAGS,
@@ -382,7 +435,7 @@ class ADBHandler:
 
         try:
             r = subprocess.run(
-                ['adb', '-s', src_serial, 'exec-out', 'find', src_path, '-type', 'f'],
+                [ADB_EXE, '-s', src_serial, 'exec-out', 'find', src_path, '-type', 'f'],
                 capture_output=True, timeout=30,
                 startupinfo=self._make_startupinfo(),
                 creationflags=self._WIN_FLAGS,

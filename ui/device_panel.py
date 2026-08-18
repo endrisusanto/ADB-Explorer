@@ -44,11 +44,17 @@ class PathInput(QLineEdit):
         text = self.text().strip()
         if not text:
             return
-        
-        if text.startswith("/"):
-            target = text
+
+        if isinstance(self._panel.adb_handler, LocalFileHandler):
+            if os.path.isabs(text) or (os.name == 'nt' and len(text) >= 2 and text[1] == ':'):
+                target = os.path.normpath(text)
+            else:
+                target = str(Path(self._panel.current_path) / text)
         else:
-            target = f"{self._panel.current_path.rstrip('/')}/{text}"
+            if text.startswith("/"):
+                target = text
+            else:
+                target = f"{self._panel.current_path.rstrip('/')}/{text}"
         self._panel.current_path = target
         self._panel.path_history.append(target)
         self._panel.clear_search_on_navigation()
@@ -186,8 +192,14 @@ class DevicePanel(QWidget):
         header = self.tree_view.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, header.ResizeMode.Stretch)
-        for col in (1, 2, 3, 4):
-            header.setSectionResizeMode(col, header.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, header.ResizeMode.Interactive)
+        header.setSectionResizeMode(2, header.ResizeMode.Interactive)
+        header.setSectionResizeMode(3, header.ResizeMode.Interactive)
+        header.setSectionResizeMode(4, header.ResizeMode.Interactive)
+        self.tree_view.setColumnWidth(1, 80)
+        self.tree_view.setColumnWidth(2, 85)
+        self.tree_view.setColumnWidth(3, 100)
+        self.tree_view.setColumnWidth(4, 130)
         self.tree_view.doubleClicked.connect(self.handle_double_click)
         self.tree_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree_view.customContextMenuRequested.connect(self.show_context_menu)
@@ -238,7 +250,14 @@ class DevicePanel(QWidget):
         self.back_btn.setEnabled(len(self.path_history) > 1)
 
     def go_up(self):
-        parent = "/".join(self.current_path.rstrip("/").split("/")[:-1]) or self.root_path
+        if isinstance(self.adb_handler, LocalFileHandler):
+            current = Path(self.current_path)
+            parent = str(current.parent)
+            if parent == self.current_path or not os.path.exists(parent):
+                parent = "/"
+        else:
+            parent = "/".join(self.current_path.rstrip("/").split("/")[:-1]) or self.root_path
+
         if parent != self.current_path:
             self.current_path = parent
             self.clear_search_on_navigation()
@@ -337,7 +356,7 @@ class DevicePanel(QWidget):
         if files is None:
             return
 
-        current_normalized = "/" if self.current_path == "/" else self.current_path.rstrip("/")
+        current_normalized = "/" if self.current_path == "/" else self.current_path.rstrip("/\\")
         if current_normalized != self.root_path:
             parent_item = QStandardItem("..")
             parent_item.setIcon(self._folder_icon)
@@ -346,6 +365,8 @@ class DevicePanel(QWidget):
 
         dirs = sorted([f for f in files if f.is_dir], key=lambda x: x.name.lower())
         regular_files = sorted([f for f in files if not f.is_dir], key=lambda x: x.name.lower())
+        is_windows = os.name == 'nt'
+
         for file_item in dirs + regular_files:
             name_item = QStandardItem(file_item.name)
             if file_item.is_dir:
@@ -353,9 +374,12 @@ class DevicePanel(QWidget):
             else:
                 ext = os.path.splitext(file_item.name)[1].lower()
                 if ext not in self._icon_cache:
-                    icon = self._icon_provider.icon(QFileInfo(f"x{ext}"))
-                    self._icon_cache[ext] = icon if not icon.isNull() else self._file_icon
-                name_item.setIcon(self._icon_cache[ext])
+                    if is_windows:
+                        self._icon_cache[ext] = self._file_icon
+                    else:
+                        icon = self._icon_provider.icon(QFileInfo(f"x{ext}"))
+                        self._icon_cache[ext] = icon if not icon.isNull() else self._file_icon
+                name_item.setIcon(self._icon_cache.get(ext, self._file_icon))
             self.tree_model.appendRow([
                 name_item,
                 QStandardItem("Directory" if file_item.is_dir else "File"),
@@ -363,8 +387,6 @@ class DevicePanel(QWidget):
                 QStandardItem(file_item.permissions),
                 QStandardItem(file_item.date_modified),
             ])
-        for i in range(5):
-            self.tree_view.resizeColumnToContents(i)
         self.path_display.update_completions(files)
 
     def handle_double_click(self, index):
@@ -377,10 +399,20 @@ class DevicePanel(QWidget):
         if item_type == "Directory":
             new_path = ""
             if item_name == "..":
-                parent_path = "/".join(self.current_path.rstrip("/").split("/")[:-1])
-                new_path = parent_path if parent_path else self.root_path
+                if isinstance(self.adb_handler, LocalFileHandler):
+                    parent_path = str(Path(self.current_path).parent)
+                    new_path = parent_path if parent_path != self.current_path else "/"
+                else:
+                    parent_path = "/".join(self.current_path.rstrip("/").split("/")[:-1])
+                    new_path = parent_path if parent_path else self.root_path
             else:
-                new_path = f"{self.current_path.rstrip('/')}/{item_name}"
+                if isinstance(self.adb_handler, LocalFileHandler):
+                    if self.current_path == "/":
+                        new_path = f"{item_name}\\" if os.name == 'nt' else f"/{item_name}"
+                    else:
+                        new_path = str(Path(self.current_path) / item_name)
+                else:
+                    new_path = f"{self.current_path.rstrip('/')}/{item_name}"
             if new_path and new_path != self.current_path:
                 self.current_path = new_path
                 self.path_history.append(self.current_path)
@@ -692,6 +724,26 @@ class DevicePanel(QWidget):
 
     def _open_local_folder(self, path):
         path = os.path.abspath(path)
+        if sys.platform.startswith('win'):
+            try:
+                os.startfile(path)
+                return True
+            except Exception:
+                try:
+                    subprocess.Popen(['explorer', os.path.normpath(path)])
+                    return True
+                except Exception as e:
+                    self.status_label.setText(f"Open files failed: {e}")
+                    return False
+
+        if sys.platform.startswith('darwin'):
+            try:
+                subprocess.Popen(['open', path])
+                return True
+            except Exception as e:
+                self.status_label.setText(f"Open files failed: {e}")
+                return False
+
         env = os.environ.copy()
         for key in ("QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "QT_QPA_PLATFORM"):
             env.pop(key, None)
@@ -700,13 +752,13 @@ class DevicePanel(QWidget):
         else:
             env.pop("LD_LIBRARY_PATH", None)
         commands = (
+            ("xdg-open", [path]),
+            ("nautilus", [path]),
             ("dolphin", [path]),
             ("kioclient5", ["exec", path]),
             ("kioclient", ["exec", path]),
             ("kde-open5", [path]),
             ("kde-open", [path]),
-            ("nautilus", [path]),
-            ("xdg-open", [path]),
         )
         last_error = ""
         for opener, args in commands:
@@ -714,18 +766,13 @@ class DevicePanel(QWidget):
             if not exe:
                 continue
             try:
-                proc = subprocess.Popen(
+                subprocess.Popen(
                     [exe, *args],
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
                     env=env,
                     start_new_session=True,
                 )
-                time.sleep(0.7)
-                if proc.poll() not in (None, 0):
-                    stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
-                    last_error = stderr.strip()
-                    continue
                 self.status_label.setText(f"Opening {opener}: {path}")
                 return True
             except OSError as e:

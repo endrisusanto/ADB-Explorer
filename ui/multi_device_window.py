@@ -266,27 +266,45 @@ class MultiDeviceWindow(QMainWindow):
     
 
     def _initialize_panels(self):
-        initial_devices = ADBHandler().get_unique_devices()
-        self._refresh_device_cards(initial_devices)
+        self._cached_devices = {}
+        self._device_fetch_task = None
+        self._conn_check_task = None
+        self._refresh_device_cards({})
+        self.status_label.setText("Detecting ADB devices...")
+        self._async_fetch_devices()
 
-        if not initial_devices:
-            self.status_label.setText("No ADB devices found. Connect a device and refresh.")
+    def _async_fetch_devices(self):
+        if self._device_fetch_task is not None and self._device_fetch_task.isRunning():
             return
 
-        self.status_label.setText("Ready. Choose a card to open a panel.")
+        def fetch():
+            return ADBHandler().get_unique_devices()
+
+        def on_fetched(devices):
+            self._device_fetch_task = None
+            devices = devices or {}
+            self._cached_devices = devices
+            self._refresh_device_cards(devices)
+            if not devices:
+                self.status_label.setText("No ADB devices found. Connect a device and refresh.")
+            else:
+                self.status_label.setText("Ready. Choose a card to open a panel.")
+
+        self._device_fetch_task = WorkerThread("Discover Devices", fetch)
+        self._device_fetch_task.finished_signal.connect(on_fetched)
+        self._device_fetch_task.start()
 
     def _add_panel_for_device(self, serial, model, start_path="/storage/emulated/0"):
         if self._panel_limit_reached():
             return None
         try:
-            handler = ADBHandler(device_serial=serial)
+            handler = ADBHandler(device_serial=serial, check_connection=False)
             panel = DevicePanel(self.splitter, handler, device_info={"model": model}, start_path=start_path)
             self.splitter.addWidget(panel)
             self.device_panels.append(panel)
             panel.cross_device_drop.connect(self._on_cross_device_drop)
             panel.close_requested.connect(lambda p=panel: self._close_panel(p))
 
-            
             idx = len(self.device_panels)
             self.status_label.setText(f"Added panel {idx}: {model} ({serial})")
             self._update_panel_count_ui()
@@ -297,7 +315,7 @@ class MultiDeviceWindow(QMainWindow):
             return None
 
     def _add_panel(self):
-        devices = ADBHandler().get_unique_devices()
+        devices = getattr(self, '_cached_devices', {})
         existing_serials = {p.device_serial for p in self.device_panels}
         for serial, model in devices.items():
             if serial not in existing_serials:
@@ -315,7 +333,7 @@ class MultiDeviceWindow(QMainWindow):
         self.status_label.setText("Panel closed")
 
     def _update_panel_count_ui(self):
-        self._refresh_device_cards()
+        self._refresh_device_cards(getattr(self, '_cached_devices', None))
 
     def _panel_limit_reached(self):
         limit = self._panel_limit()
@@ -330,7 +348,7 @@ class MultiDeviceWindow(QMainWindow):
     def _toggle_device_list_mode(self):
         self._device_list_vertical = not self._device_list_vertical
         self._apply_device_list_mode()
-        self._refresh_device_cards()
+        self._refresh_device_cards(getattr(self, '_cached_devices', None))
 
     def _take_layout_widget(self, layout, widget):
         for i in range(layout.count()):
@@ -390,16 +408,11 @@ class MultiDeviceWindow(QMainWindow):
         btn.setMinimumWidth(min_width)
         btn.setMaximumWidth(max_width)
         btn.setStyleSheet(
-            f"QPushButton#device_card {{ min-width: {min_width}px; max-width: {max_width}px; background: {bg}; border-color: {color}; color: {base_text}; }}"
+            f"QPushButton#device_card {{ min-width: {min_width}px; max-width: {max_width}px; background: {bg}; border: 1.5px solid {color}; border-radius: 8px; color: {base_text}; padding: 6px 10px; text-align: left; }}"
             f"QPushButton#device_card:hover {{ background: {hover}; border-color: {color}; color: {text}; }}"
-            f"QPushButton#device_card:checked {{ background: {soft}; border-color: {color}; color: {text}; }}"
-            f"QPushButton#device_card:disabled {{ border-color: {color}; color: {disabled}; }}"
+            f"QPushButton#device_card:checked {{ background: {soft}; border: 2px solid {color}; color: {text}; font-weight: bold; }}"
+            f"QPushButton#device_card:disabled {{ border-color: {disabled}; color: {disabled}; }}"
         )
-        btn.style().unpolish(btn)
-        btn.style().polish(btn)
-        btn._shadow_effect = _card_shadow(color, self._dark) if btn.isChecked() else None
-        btn.setGraphicsEffect(btn._shadow_effect)
-        btn.update()
 
     def _repolish_topbar(self):
         for widget in (self.sidebar, self.topbar, self.action_group, self.device_status_label, self.layout_mode_btn, self.refresh_devices_btn, self.theme_btn):
@@ -408,7 +421,10 @@ class MultiDeviceWindow(QMainWindow):
             widget.update()
 
     def _refresh_device_cards(self, devices=None):
-        devices = ADBHandler().get_unique_devices() if devices is None else devices
+        if devices is None:
+            self._async_fetch_devices()
+            devices = getattr(self, '_cached_devices', {})
+
         bar = self.device_scroll.verticalScrollBar() if self._device_list_vertical else self.device_scroll.horizontalScrollBar()
         scroll_pos = bar.value()
         while self.device_strip_layout.count():
@@ -685,17 +701,41 @@ class MultiDeviceWindow(QMainWindow):
     
 
     def _check_connections(self):
-        for panel in self.device_panels:
-            was = panel.adb_handler.device_connected
-            panel.adb_handler.device_connected = panel.adb_handler.check_adb_connection()
-            if was != panel.adb_handler.device_connected:
-                panel.update_connection_status()
-                if not panel.adb_handler.device_connected:
-                    panel.status_label.setText("Disconnected")
-                else:
-                    panel.status_label.setText("Reconnected")
-                    panel.refresh_files()
-        self._refresh_device_cards()
+        if self._conn_check_task is not None and self._conn_check_task.isRunning():
+            return
+
+        panels = list(self.device_panels)
+
+        def check_bg():
+            statuses = []
+            for panel in panels:
+                connected = panel.adb_handler.check_adb_connection()
+                statuses.append((panel, connected))
+            devices = ADBHandler().get_unique_devices()
+            return statuses, devices
+
+        def on_checked(result):
+            self._conn_check_task = None
+            if not result:
+                return
+            statuses, devices = result
+            self._cached_devices = devices
+            for panel, connected in statuses:
+                if panel in self.device_panels:
+                    was = panel.adb_handler.device_connected
+                    panel.adb_handler.device_connected = connected
+                    if was != connected:
+                        panel.update_connection_status()
+                        if not connected:
+                            panel.status_label.setText("Disconnected")
+                        else:
+                            panel.status_label.setText("Reconnected")
+                            panel.refresh_files()
+            self._refresh_device_cards(devices)
+
+        self._conn_check_task = WorkerThread("Check Connections", check_bg)
+        self._conn_check_task.finished_signal.connect(on_checked)
+        self._conn_check_task.start()
 
     
 

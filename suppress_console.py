@@ -11,11 +11,12 @@ def suppress_console():
 
     def _patched_popen_init(self, args, **kwargs):
         kwargs['creationflags'] = kwargs.get('creationflags', 0) | CREATE_NO_WINDOW
-        if 'startupinfo' not in kwargs or kwargs['startupinfo'] is None:
+        si = kwargs.get('startupinfo')
+        if si is None:
             si = subprocess.STARTUPINFO()
-            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            si.wShowWindow = subprocess.SW_HIDE
-            kwargs['startupinfo'] = si
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = subprocess.SW_HIDE
+        kwargs['startupinfo'] = si
         _original_popen_init(self, args, **kwargs)
 
     subprocess.Popen.__init__ = _patched_popen_init
