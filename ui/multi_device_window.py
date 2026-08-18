@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QSplitter, QVBoxLayout, QHBoxLayout, QWidget,
     QPushButton, QMessageBox, QStatusBar, QLabel, QDialog,
     QFileDialog, QMenu, QApplication, QScrollArea, QSizePolicy,
-    QGraphicsDropShadowEffect,
+    QGraphicsDropShadowEffect, QBoxLayout,
 )
 from PyQt6.QtCore import Qt, QTimer, QUrl, QEvent
 from PyQt6.QtGui import QDesktopServices, QIcon, QColor
@@ -33,6 +33,7 @@ def get_resource_dir():
 
 CONFIG_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "adb-file-explorer" / "config.ini"
 MAX_PANELS = 4
+VERTICAL_MAX_PANELS = 3
 MODEL_COLORS = (
     "#2563eb", "#dc2626", "#16a34a", "#f97316",
     "#7c3aed", "#0891b2", "#db2777", "#65a30d",
@@ -100,6 +101,7 @@ class MultiDeviceWindow(QMainWindow):
 
         self.device_panels = []
         self._dark = _load_theme()
+        self._device_list_vertical = True
         QApplication.instance().setStyleSheet(DARK if self._dark else LIGHT)
 
         
@@ -117,48 +119,62 @@ class MultiDeviceWindow(QMainWindow):
         central = QWidget()
         central.setObjectName("app_root")
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
+        layout = QHBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-
-        
-        topbar = QWidget()
-        topbar.setObjectName("main_topbar")
-        topbar.setFixedHeight(96)
-        topbar_layout = QHBoxLayout(topbar)
-        topbar_layout.setContentsMargins(12, 8, 12, 10)
-        topbar_layout.setSpacing(10)
-        layout.addWidget(topbar)
 
         self.device_status_label = QLabel("Detecting devices...")
         self.device_status_label.setObjectName("device_count_badge")
         self.device_status_label.setToolTip("Connected device count")
 
+        self.sidebar = QWidget()
+        self.sidebar.setObjectName("device_sidebar")
+        self.sidebar.setFixedWidth(292)
+        self.sidebar_layout = QVBoxLayout(self.sidebar)
+        self.sidebar_layout.setContentsMargins(12, 12, 12, 12)
+        self.sidebar_layout.setSpacing(10)
+        layout.addWidget(self.sidebar)
+
+        self.content = QWidget()
+        self.content.setObjectName("content_root")
+        content_layout = QVBoxLayout(self.content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        layout.addWidget(self.content, 1)
+
+        self.topbar = QWidget()
+        self.topbar.setObjectName("main_topbar")
+        self.topbar.setFixedHeight(112)
+        self.topbar_layout = QHBoxLayout(self.topbar)
+        self.topbar_layout.setContentsMargins(12, 8, 12, 10)
+        self.topbar_layout.setSpacing(10)
+        content_layout.addWidget(self.topbar)
+
         self.device_scroll = QScrollArea()
         self.device_scroll.setObjectName("device_strip")
         self.device_scroll.setWidgetResizable(True)
-        self.device_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.device_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.device_scroll.setFixedHeight(78)
-        self.device_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.device_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.device_scroll.viewport().installEventFilter(self)
-        self.device_scroll.horizontalScrollBar().setSingleStep(28)
         self.device_strip = QWidget()
-        self.device_strip_layout = QHBoxLayout(self.device_strip)
-        self.device_strip_layout.setContentsMargins(14, 10, 14, 18)
+        self.device_strip_layout = QBoxLayout(QBoxLayout.Direction.TopToBottom, self.device_strip)
+        self.device_strip_layout.setContentsMargins(0, 4, 0, 12)
         self.device_strip_layout.setSpacing(10)
         self.device_strip.installEventFilter(self)
         self.device_scroll.setWidget(self.device_strip)
-        topbar_layout.addWidget(self.device_scroll, 1)
 
         self.action_group = QWidget()
         self.action_group.setObjectName("topbar_actions")
         action_layout = QHBoxLayout(self.action_group)
         action_layout.setContentsMargins(4, 4, 4, 4)
         action_layout.setSpacing(6)
-        topbar_layout.addWidget(self.action_group)
-
+        self.device_status_label.setText("0")
         action_layout.addWidget(self.device_status_label)
+
+        self.layout_mode_btn = QPushButton()
+        self.layout_mode_btn.setObjectName("icon_badge")
+        self.layout_mode_btn.setToolTip("Toggle device list layout")
+        self.layout_mode_btn.clicked.connect(self._toggle_device_list_mode)
+        action_layout.addWidget(self.layout_mode_btn)
 
         self.refresh_devices_btn = QPushButton()
         self.refresh_devices_btn.setObjectName("icon_badge")
@@ -199,7 +215,7 @@ class MultiDeviceWindow(QMainWindow):
         
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(True)
-        layout.addWidget(self.splitter)
+        content_layout.addWidget(self.splitter, 1)
 
         
         self.status_bar = QStatusBar()
@@ -209,6 +225,7 @@ class MultiDeviceWindow(QMainWindow):
 
         
         self.task_manager = BackgroundTaskManager(central)
+        self._apply_device_list_mode()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -221,13 +238,7 @@ class MultiDeviceWindow(QMainWindow):
             self._position_task_manager()
 
     def eventFilter(self, obj, event):
-        in_device_strip = (
-            hasattr(self, "device_scroll")
-            and (obj is self.device_scroll.viewport()
-                 or obj is self.device_strip
-                 or self.device_strip.isAncestorOf(obj))
-        )
-        if in_device_strip and event.type() == QEvent.Type.Wheel:
+        if not self._device_list_vertical and obj is self.device_scroll.viewport() and event.type() == QEvent.Type.Wheel:
             delta = event.angleDelta().y() or event.angleDelta().x()
             if delta:
                 bar = self.device_scroll.horizontalScrollBar()
@@ -307,10 +318,64 @@ class MultiDeviceWindow(QMainWindow):
         self._refresh_device_cards()
 
     def _panel_limit_reached(self):
-        if len(self.device_panels) < MAX_PANELS:
+        limit = self._panel_limit()
+        if len(self.device_panels) < limit:
             return False
-        self.status_label.setText(f"Maximum {MAX_PANELS} panels open")
+        self.status_label.setText(f"Maximum {limit} panels open")
         return True
+
+    def _panel_limit(self):
+        return VERTICAL_MAX_PANELS if self._device_list_vertical else MAX_PANELS
+
+    def _toggle_device_list_mode(self):
+        self._device_list_vertical = not self._device_list_vertical
+        self._apply_device_list_mode()
+        self._refresh_device_cards()
+
+    def _take_layout_widget(self, layout, widget):
+        for i in range(layout.count()):
+            if layout.itemAt(i).widget() is widget:
+                return layout.takeAt(i)
+        return None
+
+    def _apply_device_list_mode(self):
+        self._take_layout_widget(self.sidebar_layout, self.device_scroll)
+        self._take_layout_widget(self.sidebar_layout, self.action_group)
+        self._take_layout_widget(self.topbar_layout, self.device_scroll)
+        self._take_layout_widget(self.topbar_layout, self.action_group)
+
+        if self._device_list_vertical:
+            self.sidebar.show()
+            self.topbar.hide()
+            self.device_scroll.setMinimumHeight(0)
+            self.device_scroll.setMaximumHeight(16777215)
+            self.device_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.device_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.device_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self.device_strip_layout.setDirection(QBoxLayout.Direction.TopToBottom)
+            self.device_strip_layout.setContentsMargins(0, 4, 0, 12)
+            self.sidebar_layout.addWidget(self.device_scroll, 1)
+            self.sidebar_layout.addWidget(self.action_group)
+            self.layout_mode_btn.setText("↔")
+            self.layout_mode_btn.setToolTip("Switch to horizontal device list")
+        else:
+            self.sidebar.hide()
+            self.topbar.show()
+            self.device_scroll.setMinimumWidth(0)
+            self.device_scroll.setMaximumWidth(16777215)
+            self.device_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.device_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.device_scroll.setFixedHeight(94)
+            self.device_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.device_strip_layout.setDirection(QBoxLayout.Direction.LeftToRight)
+            self.device_strip_layout.setContentsMargins(14, 10, 14, 30)
+            self.topbar_layout.addWidget(self.device_scroll, 1)
+            self.topbar_layout.addWidget(self.action_group)
+            self.layout_mode_btn.setText("↕")
+            self.layout_mode_btn.setToolTip("Switch to vertical device list")
+        self.device_scroll.verticalScrollBar().setSingleStep(28)
+        self.device_scroll.horizontalScrollBar().setSingleStep(28)
+        self._repolish_topbar()
 
     def _style_device_card(self, btn, model):
         color = _model_color(model or "Root")
@@ -320,8 +385,12 @@ class MultiDeviceWindow(QMainWindow):
         base_text = "#f4f4f5" if self._dark else "#334155"
         text = "#f4f4f5" if self._dark else "#0f172a"
         disabled = "#71717a" if self._dark else "#94a3b8"
+        min_width = 0 if self._device_list_vertical else 210
+        max_width = 260 if self._device_list_vertical else 220
+        btn.setMinimumWidth(min_width)
+        btn.setMaximumWidth(max_width)
         btn.setStyleSheet(
-            f"QPushButton#device_card {{ background: {bg}; border-color: {color}; color: {base_text}; }}"
+            f"QPushButton#device_card {{ min-width: {min_width}px; max-width: {max_width}px; background: {bg}; border-color: {color}; color: {base_text}; }}"
             f"QPushButton#device_card:hover {{ background: {hover}; border-color: {color}; color: {text}; }}"
             f"QPushButton#device_card:checked {{ background: {soft}; border-color: {color}; color: {text}; }}"
             f"QPushButton#device_card:disabled {{ border-color: {color}; color: {disabled}; }}"
@@ -333,15 +402,15 @@ class MultiDeviceWindow(QMainWindow):
         btn.update()
 
     def _repolish_topbar(self):
-        for widget in (self.action_group, self.device_status_label, self.refresh_devices_btn, self.theme_btn):
+        for widget in (self.sidebar, self.topbar, self.action_group, self.device_status_label, self.layout_mode_btn, self.refresh_devices_btn, self.theme_btn):
             widget.style().unpolish(widget)
             widget.style().polish(widget)
             widget.update()
 
     def _refresh_device_cards(self, devices=None):
         devices = ADBHandler().get_unique_devices() if devices is None else devices
-        bar = self.device_scroll.horizontalScrollBar()
-        scroll_x = bar.value()
+        bar = self.device_scroll.verticalScrollBar() if self._device_list_vertical else self.device_scroll.horizontalScrollBar()
+        scroll_pos = bar.value()
         while self.device_strip_layout.count():
             item = self.device_strip_layout.takeAt(0)
             if item.widget():
@@ -351,7 +420,7 @@ class MultiDeviceWindow(QMainWindow):
 
         opened = {p.device_serial for p in self.device_panels}
         root_open = any(p.device_serial == LocalFileHandler.device_serial for p in self.device_panels)
-        can_open = len(self.device_panels) < MAX_PANELS
+        can_open = len(self.device_panels) < self._panel_limit()
         self.device_status_label.setText(str(len(devices)))
 
         if not devices:
@@ -360,32 +429,26 @@ class MultiDeviceWindow(QMainWindow):
             empty.installEventFilter(self)
             self.device_strip_layout.addWidget(empty)
 
-        root_btn = QPushButton(f"{'Active' if root_open else 'Ready'} · Root\n{Path.home()}")
-        root_btn.setObjectName("device_card")
-        root_btn.setCheckable(True)
-        root_btn.setChecked(root_open)
-        root_btn.setEnabled(root_open or can_open)
-        root_btn.setToolTip("Close root folder panel" if root_open else "Open root folder panel")
-        root_btn.installEventFilter(self)
-        self._style_device_card(root_btn, "Root")
-        root_btn.clicked.connect(lambda _=False: self._open_root_card())
-        self.device_strip_layout.addWidget(root_btn)
-
-        for serial, model in devices.items():
-            is_open = serial in opened
-            btn = QPushButton(f"{'Active' if is_open else 'Ready'} · {model or 'Android Device'}\n{serial}")
+        cards = [("root", "Root", str(Path.home()), root_open)]
+        cards += [(serial, model or "Android Device", serial, serial in opened) for serial, model in devices.items()]
+        for serial, model, subtitle, is_open in sorted(cards, key=lambda item: not item[3]):
+            btn = QPushButton(f"{'Active' if is_open else 'Ready'} · {model}\n{subtitle}")
             btn.setObjectName("device_card")
             btn.setCheckable(True)
             btn.setChecked(is_open)
             btn.setEnabled(is_open or can_open)
-            btn.setToolTip("Close panel" if is_open else "Open device panel")
+            btn.setToolTip("Close panel" if is_open else "Open panel")
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             btn.installEventFilter(self)
-            self._style_device_card(btn, model or "Android Device")
-            btn.clicked.connect(lambda _, s=serial, m=model: self._open_device_card(s, m))
+            self._style_device_card(btn, model)
+            if serial == "root":
+                btn.clicked.connect(lambda _=False: self._open_root_card())
+            else:
+                btn.clicked.connect(lambda _, s=serial, m=model: self._open_device_card(s, m))
             self.device_strip_layout.addWidget(btn)
 
         self.device_strip_layout.addStretch()
-        QTimer.singleShot(0, lambda v=scroll_x: bar.setValue(min(v, bar.maximum())))
+        QTimer.singleShot(0, lambda v=scroll_pos: bar.setValue(min(v, bar.maximum())))
 
     def _open_device_card(self, serial, model):
         for panel in self.device_panels:

@@ -389,15 +389,19 @@ QWidget#main_topbar {
     background: rgba(255, 255, 255, 222);
     border-bottom: 1px solid rgba(209, 213, 219, 150);
 }
+QWidget#device_sidebar {
+    background: rgba(255, 255, 255, 168);
+    border-right: 1px solid rgba(209, 213, 219, 150);
+}
 QScrollArea#device_strip {
     border: none;
     background: transparent;
 }
 QPushButton#device_card {
-    min-width: 210px;
-    max-width: 220px;
-    min-height: 38px;
-    max-height: 40px;
+    min-width: 0px;
+    max-width: 260px;
+    min-height: 50px;
+    max-height: 54px;
     padding: 6px 12px;
     text-align: left;
     border-radius: 14px;
@@ -456,8 +460,8 @@ QCheckBox::indicator {
 }
 QWidget#app_root,
 QWidget#main_topbar,
-QScrollArea#device_strip,
 QScrollArea#device_strip QWidget,
+QScrollArea#device_strip,
 QSplitter {
     background: transparent;
 }
@@ -864,15 +868,19 @@ QWidget#main_topbar {
     background: rgba(20, 20, 22, 226);
     border-bottom: 1px solid #27272a;
 }
+QWidget#device_sidebar {
+    background: rgba(20, 20, 22, 196);
+    border-right: 1px solid #27272a;
+}
 QScrollArea#device_strip {
     border: none;
     background: transparent;
 }
 QPushButton#device_card {
-    min-width: 210px;
-    max-width: 220px;
-    min-height: 38px;
-    max-height: 40px;
+    min-width: 0px;
+    max-width: 260px;
+    min-height: 50px;
+    max-height: 54px;
     padding: 6px 12px;
     text-align: left;
     border-radius: 14px;
