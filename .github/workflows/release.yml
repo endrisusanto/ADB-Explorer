@@ -22,7 +22,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          choco install nsis wixtoolset --no-progress -y
+          choco install nsis --no-progress -y
       - name: Build portable exe
         shell: pwsh
         run: |
@@ -32,47 +32,17 @@ jobs:
           if (-not $exe) { throw "PyInstaller did not produce an exe" }
           $target = Join-Path (Get-Location) "dist\ADB-Explorer.exe"
           if ($exe.FullName -ne $target) { Copy-Item $exe.FullName $target -Force }
+          Copy-Item "dist\ADB-Explorer.exe" "dist\ADB-Explorer-portable.exe" -Force
       - name: Build NSIS installer
         shell: pwsh
         run: |
           $version = Get-Content VERSION
           & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /DVERSION=$version packaging\nsis\installer.nsi
-      - name: Build MSI
-        shell: pwsh
-        run: |
-          $version = Get-Content VERSION
-          $wxs = @"
-          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-            <Product Id="*" Name="ADB Explorer" Language="1033" Version="$version" Manufacturer="endrisusanto" UpgradeCode="9F671495-3517-40B3-9C46-D6FCAC4AB3B2">
-              <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
-              <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
-              <MediaTemplate EmbedCab="yes" />
-              <Directory Id="TARGETDIR" Name="SourceDir">
-                <Directory Id="ProgramFilesFolder">
-                  <Directory Id="INSTALLFOLDER" Name="ADB Explorer" />
-                </Directory>
-              </Directory>
-              <DirectoryRef Id="INSTALLFOLDER">
-                <Component Id="AppExe" Guid="*">
-                  <File Id="AppExeFile" Source="dist\ADB-Explorer.exe" KeyPath="yes" />
-                </Component>
-              </DirectoryRef>
-              <Feature Id="DefaultFeature" Level="1">
-                <ComponentRef Id="AppExe" />
-              </Feature>
-            </Product>
-          </Wix>
-          "@
-          Set-Content installer.wxs $wxs
-          & "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin\candle.exe" installer.wxs
-          & "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin\light.exe" -o "dist\ADB-Explorer-$version.msi" installer.wixobj
-          Copy-Item "dist\ADB-Explorer.exe" "dist\ADB-Explorer-portable.exe" -Force
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
             dist/ADB-Explorer-portable.exe
-            dist/*.msi
             dist/*setup.exe
       - name: Publish Windows assets
         if: startsWith(github.ref, 'refs/tags/')
@@ -80,7 +50,6 @@ jobs:
         with:
           files: |
             dist/ADB-Explorer-portable.exe
-            dist/*.msi
             dist/*setup.exe
 
   linux:
